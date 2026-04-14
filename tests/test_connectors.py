@@ -3,6 +3,7 @@ from urllib.error import HTTPError
 import pytest
 
 from stock_researcher.connectors import (
+    FinancialDatasetsMarketDataClient,
     SecCompanyFactsMarketDataClient,
     SecFilingsClient,
     YahooFinanceNewsClient,
@@ -252,6 +253,57 @@ def test_sec_companyfacts_market_data_client_derives_financial_metadata() -> Non
     assert metadata["technical_analysis"]["trend"] == "uptrend"
     assert metadata["technical_analysis"]["momentum"] == "positive"
     assert metadata["technical_analysis"]["entry_quality"] in {"constructive", "neutral", "extended"}
+
+
+def test_financial_datasets_market_data_client_derives_metadata() -> None:
+    def fake_fetch(url: str, headers: dict[str, str]) -> dict:
+        assert headers["X-API-KEY"] == "test-key"
+        if "financial-metrics/snapshot" in url:
+            return {
+                "financial_metrics": {
+                    "ticker": "NVDA",
+                    "price_to_earnings_ratio": 39.2,
+                    "enterprise_value_to_ebitda_ratio": 27.1,
+                    "free_cash_flow_yield": 0.018,
+                    "revenue_growth": 0.42,
+                    "net_income_growth": 0.58,
+                    "gross_margin": 0.74,
+                    "operating_margin": 0.52,
+                    "free_cash_flow_margin": 0.31,
+                    "current_ratio": 2.4,
+                    "debt_to_equity": 0.28,
+                }
+            }
+        if "prices/snapshot" in url:
+            return {
+                "snapshot": {
+                    "ticker": "NVDA",
+                    "price": 120.0,
+                    "market_cap": 2900000000000,
+                }
+            }
+        return {
+            "prices": [
+                {"time": f"2026-01-{day:02d}", "close": 80.0} for day in range(1, 32)
+            ]
+            + [{"time": f"2026-02-{day:02d}", "close": 90.0} for day in range(1, 29)]
+            + [{"time": f"2026-03-{day:02d}", "close": 105.0} for day in range(1, 32)]
+            + [{"time": f"2026-04-{day:02d}", "close": 120.0} for day in range(1, 29)]
+        }
+
+    client = FinancialDatasetsMarketDataClient(api_key="test-key", fetch_json=fake_fetch)
+    docs = client.get_market_documents("NVDA")
+
+    assert len(docs) == 1
+    metadata = docs[0].metadata
+    assert metadata["growth_profile"]["revenue_growth_trend"] == "strong"
+    assert metadata["margin_profile"]["gross_margin_trend"] == "up"
+    assert metadata["cash_flow_profile"]["free_cash_flow_quality"] == "strong"
+    assert metadata["balance_sheet_profile"]["debt_risk"] == "low"
+    assert metadata["current_valuation"]["pe"] == 39.2
+    assert metadata["current_valuation"]["market_cap"] == 2900000000000
+    assert metadata["technical_analysis"]["entry_quality"] in {"constructive", "neutral", "extended"}
+    assert metadata["data_provider"] == "financialdatasets"
 
 
 def test_yahoo_finance_news_client_parses_rss_items() -> None:

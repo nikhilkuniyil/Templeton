@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from uuid import uuid4
 
 from .agents import AgentRuntime
 from .connectors import (
     ConnectorBundle,
     ConnectorError,
+    FinancialDatasetsMarketDataClient,
     SecCompanyFactsMarketDataClient,
     SecFilingsClient,
     YahooFinanceNewsClient,
@@ -35,6 +37,11 @@ def build_parser() -> argparse.ArgumentParser:
     investigate.add_argument("--demo", action="store_true", help="Use built-in demo connector data")
     investigate.add_argument("--live-filings", action="store_true", help="Use live SEC filings with empty market/news connectors")
     investigate.add_argument(
+        "--financial-datasets",
+        action="store_true",
+        help="Use Financial Datasets for market data while keeping SEC filings and Yahoo news",
+    )
+    investigate.add_argument(
         "--store-dir",
         default=".templeton",
         help="Local directory for run artifacts and history",
@@ -51,6 +58,11 @@ def build_parser() -> argparse.ArgumentParser:
     chat.add_argument("--demo", action="store_true", help="Use built-in demo connector data")
     chat.add_argument("--refresh", action="store_true", help="Run a fresh investigation before answering")
     chat.add_argument("--live-filings", action="store_true", help="Use live SEC filings with empty market/news connectors")
+    chat.add_argument(
+        "--financial-datasets",
+        action="store_true",
+        help="Use Financial Datasets for market data while keeping SEC filings and Yahoo news",
+    )
     chat.add_argument(
         "--store-dir",
         default=".templeton",
@@ -94,7 +106,11 @@ def main(argv: list[str] | None = None) -> int:
 
 def _handle_investigate(args) -> int:
     runtime = AgentRuntime()
-    connectors = _connector_bundle_from_args(args)
+    try:
+        connectors = _connector_bundle_from_args(args)
+    except ConnectorError as exc:
+        print(f"Connector error: {exc}")
+        return 1
     run_store = LocalRunStore(args.store_dir)
     orchestrator = InvestigationOrchestrator(connectors=connectors, run_store=run_store)
     ticker = args.ticker.upper()
@@ -135,7 +151,11 @@ def _handle_investigate(args) -> int:
 def _handle_chat(args) -> int:
     ticker = args.ticker.upper()
     runtime = AgentRuntime()
-    connectors = _connector_bundle_from_args(args)
+    try:
+        connectors = _connector_bundle_from_args(args)
+    except ConnectorError as exc:
+        print(f"Connector error: {exc}")
+        return 1
     run_store = LocalRunStore(args.store_dir)
     orchestrator = InvestigationOrchestrator(connectors=connectors, run_store=run_store)
     request = ResearchRequest(
@@ -188,6 +208,17 @@ def _handle_benchmark(args) -> int:
 def _connector_bundle_from_args(args) -> ConnectorBundle | None:
     if getattr(args, "demo", False):
         return demo_connector_bundle()
+    if getattr(args, "financial_datasets", False):
+        api_key = os.getenv("FINANCIAL_DATASETS_API_KEY")
+        if not api_key:
+            raise ConnectorError(
+                "FINANCIAL_DATASETS_API_KEY is not set. Export it before using --financial-datasets."
+            )
+        return ConnectorBundle(
+            filings=SecFilingsClient(user_agent=args.sec_user_agent),
+            market_data=FinancialDatasetsMarketDataClient(api_key=api_key),
+            news=YahooFinanceNewsClient(user_agent=args.sec_user_agent),
+        )
     if getattr(args, "live_filings", False):
         return ConnectorBundle(
             filings=SecFilingsClient(user_agent=args.sec_user_agent),

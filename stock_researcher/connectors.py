@@ -7,7 +7,7 @@ import json
 import gzip
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Callable, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -101,6 +101,133 @@ def default_bytes_fetcher(url: str, headers: dict[str, str]) -> bytes:
 
 def default_url_fetcher(url: str, headers: dict[str, str]) -> dict:
     return json.loads(default_bytes_fetcher(url, headers).decode("utf-8"))
+
+
+@dataclass(slots=True)
+class MarketDataDerivationMixin:
+    """Shared helpers for turning raw price and ratio data into agent-ready metadata."""
+
+    def _as_number(self, value) -> float | None:
+        return float(value) if isinstance(value, (int, float)) else None
+
+    def _growth_label(self, latest: float | None, previous: float | None) -> str:
+        if latest is None or previous in (None, 0):
+            return "unknown"
+        if latest > previous * 1.1:
+            return "strong"
+        if latest > previous:
+            return "positive"
+        return "negative"
+
+    def _margin_label(self, latest: float | None, previous: float | None) -> str:
+        if latest is None or previous is None:
+            return "unknown"
+        if latest > previous + 0.01:
+            return "up"
+        if latest < previous - 0.01:
+            return "down"
+        return "stable"
+
+    def _cash_flow_label(self, operating_cash_flow: float | None, net_income: float | None) -> str:
+        if operating_cash_flow is None or net_income is None:
+            return "unknown"
+        if operating_cash_flow > 0 and operating_cash_flow >= net_income:
+            return "strong"
+        if operating_cash_flow > 0:
+            return "healthy"
+        return "weak"
+
+    def _cash_conversion_label(self, operating_cash_flow: float | None, net_income: float | None) -> str:
+        if operating_cash_flow is None or net_income in (None, 0):
+            return "unknown"
+        ratio = operating_cash_flow / net_income
+        if ratio >= 1:
+            return "healthy"
+        if ratio > 0:
+            return "mixed"
+        return "weak"
+
+    def _debt_risk_label(self, cash: float | None, debt: float | None) -> str:
+        if debt is None:
+            return "unknown"
+        if cash is not None and cash >= debt:
+            return "low"
+        if cash is not None and debt > cash * 2:
+            return "high"
+        return "medium"
+
+    def _technical_metadata(self, closes: list[float], price: float | None) -> dict:
+        if not closes:
+            return {
+                "trend": "unknown",
+                "momentum": "unknown",
+                "key_levels": {"support": [], "resistance": []},
+                "entry_quality": "unknown",
+                "risk_management_note": "Insufficient price history for technical analysis.",
+            }
+        sma20 = self._sma(closes, 20)
+        sma50 = self._sma(closes, 50)
+        sma200 = self._sma(closes, 200)
+        recent_20 = closes[-20:] if len(closes) >= 20 else closes
+        recent_60 = closes[-60:] if len(closes) >= 60 else closes
+        current_price = price if price is not None else closes[-1]
+        trend = self._trend_label(current_price, sma50, sma200)
+        momentum = self._momentum_label(current_price, sma20, closes)
+        support = [level for level in (sma50, min(recent_60)) if isinstance(level, (int, float))]
+        resistance = [level for level in (max(recent_20), max(closes)) if isinstance(level, (int, float))]
+        entry_quality = self._entry_quality(current_price, sma20, sma50)
+        return {
+            "trend": trend,
+            "momentum": momentum,
+            "key_levels": {
+                "support": [round(level, 2) for level in support[:2]],
+                "resistance": [round(level, 2) for level in resistance[:2]],
+            },
+            "entry_quality": entry_quality,
+            "risk_management_note": self._risk_note(entry_quality, support[:2]),
+        }
+
+    def _sma(self, closes: list[float], window: int) -> float | None:
+        if len(closes) < window:
+            return None
+        sample = closes[-window:]
+        return sum(sample) / len(sample)
+
+    def _trend_label(self, price: float, sma50: float | None, sma200: float | None) -> str:
+        if sma50 is None or sma200 is None:
+            return "mixed"
+        if price > sma50 > sma200:
+            return "uptrend"
+        if price < sma50 < sma200:
+            return "downtrend"
+        return "mixed"
+
+    def _momentum_label(self, price: float, sma20: float | None, closes: list[float]) -> str:
+        if sma20 is None or len(closes) < 21:
+            return "neutral"
+        prior_price = closes[-21]
+        if price > sma20 and price > prior_price:
+            return "positive"
+        if price < sma20 and price < prior_price:
+            return "negative"
+        return "neutral"
+
+    def _entry_quality(self, price: float, sma20: float | None, sma50: float | None) -> str:
+        if sma20 is None or sma50 is None:
+            return "unknown"
+        distance_from_sma20 = abs(price - sma20) / sma20 if sma20 else 0
+        if price >= sma20 >= sma50 and distance_from_sma20 <= 0.05:
+            return "constructive"
+        if price > sma20 and distance_from_sma20 > 0.08:
+            return "extended"
+        return "neutral"
+
+    def _risk_note(self, entry_quality: str, support_levels: list[float]) -> str:
+        if entry_quality == "extended":
+            return "Price is extended above short-term support; avoid chasing strength."
+        if support_levels:
+            return f"Monitor support near {round(support_levels[0], 2)} for pullback risk."
+        return "Use recent support levels to manage entry risk."
 
 
 @dataclass(slots=True)
@@ -605,7 +732,7 @@ class SecFilingsClient(SecTickerResolver):
 
 
 @dataclass(slots=True)
-class SecCompanyFactsMarketDataClient(SecTickerResolver):
+class SecCompanyFactsMarketDataClient(SecTickerResolver, MarketDataDerivationMixin):
     """Fetches SEC companyfacts and derives financial-quality metadata."""
 
     quote_fetch_json: Callable[[str, dict[str, str]], dict] = default_url_fetcher
@@ -783,9 +910,6 @@ class SecCompanyFactsMarketDataClient(SecTickerResolver):
         closes = indicators[0].get("close", [])
         return [float(value) for value in closes if isinstance(value, (int, float))]
 
-    def _as_number(self, value) -> float | None:
-        return float(value) if isinstance(value, (int, float)) else None
-
     def _ratio(self, numerator: float | None, denominator: float | None) -> float | None:
         if numerator is None or denominator in (None, 0):
             return None
@@ -804,124 +928,227 @@ class SecCompanyFactsMarketDataClient(SecTickerResolver):
             return None
         return round(price / eps, 2)
 
-    def _growth_label(self, latest: float | None, previous: float | None) -> str:
-        if latest is None or previous in (None, 0):
+@dataclass(slots=True)
+class FinancialDatasetsMarketDataClient(MarketDataDerivationMixin):
+    """Fetches structured market and financial metrics from Financial Datasets."""
+
+    api_key: str
+    fetch_json: Callable[[str, dict[str, str]], dict] = default_url_fetcher
+    base_url: str = "https://api.financialdatasets.ai"
+    user_agent: str = "TempletonResearch/0.1 (contact: local@example.com)"
+
+    def get_market_documents(self, ticker: str) -> list[SourceDocument]:
+        symbol = ticker.upper()
+        try:
+            metrics = self.fetch_json(
+                f"{self.base_url}/financial-metrics/snapshot?ticker={symbol}",
+                self._headers(),
+            )
+            snapshot = self.fetch_json(
+                f"{self.base_url}/prices/snapshot?ticker={symbol}",
+                self._headers(),
+            )
+            end_date = datetime.now(timezone.utc).date()
+            start_date = end_date - timedelta(days=370)
+            prices = self.fetch_json(
+                (
+                    f"{self.base_url}/prices/?ticker={symbol}"
+                    f"&interval=day&start_date={start_date.isoformat()}&end_date={end_date.isoformat()}"
+                ),
+                self._headers(),
+            )
+        except (HTTPError, URLError, ValueError, KeyError) as exc:
+            raise ConnectorError(
+                f"Financial Datasets market-data lookup failed for {symbol}: {exc}"
+            ) from exc
+        return [self._document_from_financialdatasets(symbol, metrics, snapshot, prices)]
+
+    def _headers(self) -> dict[str, str]:
+        return {
+            "X-API-KEY": self.api_key,
+            "Accept": "application/json",
+            "User-Agent": self.user_agent,
+        }
+
+    def _document_from_financialdatasets(
+        self,
+        ticker: str,
+        metrics_response: dict,
+        snapshot_response: dict,
+        prices_response: dict,
+    ) -> SourceDocument:
+        metrics = self._coerce_record(metrics_response, ("financial_metrics", "financial_metrics_snapshot", "snapshot"))
+        snapshot = self._coerce_record(snapshot_response, ("snapshot", "price_snapshot"))
+        prices = prices_response.get("prices", [])
+        closes = [self._as_number(item.get("close")) for item in prices if isinstance(item, dict)]
+        closes = [value for value in closes if value is not None]
+        price = self._pick_number(snapshot, ("price", "close", "last_price"))
+        if price is None and closes:
+            price = closes[-1]
+
+        revenue_growth = self._pick_number(
+            metrics,
+            (
+                "revenue_growth",
+                "revenue_growth_yoy",
+                "revenue_growth_ttm",
+            ),
+        )
+        earnings_growth = self._pick_number(
+            metrics,
+            (
+                "net_income_growth",
+                "earnings_growth",
+                "eps_growth",
+                "eps_growth_ttm",
+            ),
+        )
+        gross_margin = self._pick_number(metrics, ("gross_margin", "gross_margin_ttm"))
+        operating_margin = self._pick_number(metrics, ("operating_margin", "operating_margin_ttm"))
+        free_cash_flow_margin = self._pick_number(
+            metrics,
+            ("free_cash_flow_margin", "fcf_margin", "free_cash_flow_margin_ttm"),
+        )
+        current_ratio = self._pick_number(metrics, ("current_ratio",))
+        debt_to_equity = self._pick_number(metrics, ("debt_to_equity", "debt_to_equity_ratio"))
+        pe = self._pick_number(metrics, ("price_to_earnings_ratio", "pe_ratio", "price_earnings_ratio"))
+        ev_ebitda = self._pick_number(metrics, ("enterprise_value_to_ebitda_ratio", "ev_to_ebitda"))
+        fcf_yield = self._pick_number(metrics, ("free_cash_flow_yield", "fcf_yield"))
+        market_cap = self._pick_number(snapshot, ("market_cap",))
+
+        metadata = {
+            "growth_profile": {
+                "revenue_growth_trend": self._growth_from_rate(revenue_growth),
+                "earnings_growth_trend": self._growth_from_rate(earnings_growth),
+            },
+            "margin_profile": {
+                "gross_margin_trend": self._margin_bucket(gross_margin),
+                "operating_margin_trend": self._margin_bucket(operating_margin),
+            },
+            "cash_flow_profile": {
+                "free_cash_flow_quality": self._cash_flow_bucket(free_cash_flow_margin),
+                "cash_conversion": self._cash_conversion_bucket(free_cash_flow_margin),
+            },
+            "balance_sheet_profile": {
+                "debt_risk": self._debt_bucket(debt_to_equity),
+                "liquidity": self._liquidity_bucket(current_ratio),
+            },
+            "capital_allocation": {
+                "dilution_risk": "unknown",
+                "buyback_profile": "unknown",
+            },
+            "valuation_methods": ["financialdatasets_metrics", "financialdatasets_prices"],
+            "current_valuation": {
+                "pe": pe,
+                "ev_ebitda": ev_ebitda,
+                "fcf_yield": fcf_yield,
+                "price": price,
+                "market_cap": market_cap,
+            },
+            "scenario_ranges": {},
+            "market_implied_expectations": self._expectations_from_metrics(
+                pe=pe,
+                revenue_growth=revenue_growth,
+                earnings_growth=earnings_growth,
+            ),
+            "technical_analysis": self._technical_metadata(closes=closes, price=price),
+            "data_provider": "financialdatasets",
+        }
+        retrieved_at = datetime.now(timezone.utc).isoformat()
+        return SourceDocument(
+            source_name=f"{ticker} Financial Datasets snapshot",
+            source_type="market_data",
+            source_url=f"{self.base_url}/financial-metrics/snapshot?ticker={ticker}",
+            published_at=retrieved_at,
+            retrieved_at=retrieved_at,
+            ticker=ticker,
+            metadata=metadata,
+        )
+
+    def _coerce_record(self, response: dict, keys: tuple[str, ...]) -> dict:
+        for key in keys:
+            raw = response.get(key)
+            if isinstance(raw, dict):
+                return raw
+            if isinstance(raw, list) and raw and isinstance(raw[0], dict):
+                return raw[0]
+        return {}
+
+    def _pick_number(self, record: dict, keys: tuple[str, ...]) -> float | None:
+        for key in keys:
+            value = self._as_number(record.get(key))
+            if value is not None:
+                return value
+        return None
+
+    def _growth_from_rate(self, value: float | None) -> str:
+        if value is None:
             return "unknown"
-        if latest > previous * 1.1:
+        if value >= 0.2:
             return "strong"
-        if latest > previous:
+        if value > 0:
             return "positive"
         return "negative"
 
-    def _margin_label(self, latest: float | None, previous: float | None) -> str:
-        if latest is None or previous is None:
+    def _margin_bucket(self, value: float | None) -> str:
+        if value is None:
             return "unknown"
-        if latest > previous + 0.01:
+        if value >= 0.55:
             return "up"
-        if latest < previous - 0.01:
-            return "down"
-        return "stable"
+        if value >= 0.3:
+            return "stable"
+        return "down"
 
-    def _cash_flow_label(self, operating_cash_flow: float | None, net_income: float | None) -> str:
-        if operating_cash_flow is None or net_income is None:
+    def _cash_flow_bucket(self, value: float | None) -> str:
+        if value is None:
             return "unknown"
-        if operating_cash_flow > 0 and operating_cash_flow >= net_income:
+        if value >= 0.2:
             return "strong"
-        if operating_cash_flow > 0:
+        if value > 0:
             return "healthy"
         return "weak"
 
-    def _cash_conversion_label(self, operating_cash_flow: float | None, net_income: float | None) -> str:
-        if operating_cash_flow is None or net_income in (None, 0):
+    def _cash_conversion_bucket(self, value: float | None) -> str:
+        if value is None:
             return "unknown"
-        ratio = operating_cash_flow / net_income
-        if ratio >= 1:
+        if value >= 0.15:
             return "healthy"
-        if ratio > 0:
+        if value > 0:
             return "mixed"
         return "weak"
 
-    def _debt_risk_label(self, cash: float | None, debt: float | None) -> str:
-        if debt is None:
+    def _debt_bucket(self, value: float | None) -> str:
+        if value is None:
             return "unknown"
-        if cash is not None and cash >= debt:
+        if value <= 0.5:
             return "low"
-        if cash is not None and debt > cash * 2:
-            return "high"
-        return "medium"
+        if value <= 1.5:
+            return "medium"
+        return "high"
 
-    def _technical_metadata(self, closes: list[float], price: float | None) -> dict:
-        if not closes:
-            return {
-                "trend": "unknown",
-                "momentum": "unknown",
-                "key_levels": {"support": [], "resistance": []},
-                "entry_quality": "unknown",
-                "risk_management_note": "Insufficient price history for technical analysis.",
-            }
-        sma20 = self._sma(closes, 20)
-        sma50 = self._sma(closes, 50)
-        sma200 = self._sma(closes, 200)
-        recent_20 = closes[-20:] if len(closes) >= 20 else closes
-        recent_60 = closes[-60:] if len(closes) >= 60 else closes
-        current_price = price if price is not None else closes[-1]
-        trend = self._trend_label(current_price, sma50, sma200)
-        momentum = self._momentum_label(current_price, sma20, closes)
-        support = [level for level in (sma50, min(recent_60)) if isinstance(level, (int, float))]
-        resistance = [level for level in (max(recent_20), max(closes)) if isinstance(level, (int, float))]
-        entry_quality = self._entry_quality(current_price, sma20, sma50)
-        return {
-            "trend": trend,
-            "momentum": momentum,
-            "key_levels": {
-                "support": [round(level, 2) for level in support[:2]],
-                "resistance": [round(level, 2) for level in resistance[:2]],
-            },
-            "entry_quality": entry_quality,
-            "risk_management_note": self._risk_note(entry_quality, support[:2]),
-        }
-
-    def _sma(self, closes: list[float], window: int) -> float | None:
-        if len(closes) < window:
-            return None
-        sample = closes[-window:]
-        return sum(sample) / len(sample)
-
-    def _trend_label(self, price: float, sma50: float | None, sma200: float | None) -> str:
-        if sma50 is None or sma200 is None:
-            return "mixed"
-        if price > sma50 > sma200:
-            return "uptrend"
-        if price < sma50 < sma200:
-            return "downtrend"
-        return "mixed"
-
-    def _momentum_label(self, price: float, sma20: float | None, closes: list[float]) -> str:
-        if sma20 is None or len(closes) < 21:
-            return "neutral"
-        prior_price = closes[-21]
-        if price > sma20 and price > prior_price:
-            return "positive"
-        if price < sma20 and price < prior_price:
-            return "negative"
-        return "neutral"
-
-    def _entry_quality(self, price: float, sma20: float | None, sma50: float | None) -> str:
-        if sma20 is None or sma50 is None:
+    def _liquidity_bucket(self, value: float | None) -> str:
+        if value is None:
             return "unknown"
-        distance_from_sma20 = abs(price - sma20) / sma20 if sma20 else 0
-        if price >= sma20 >= sma50 and distance_from_sma20 <= 0.05:
-            return "constructive"
-        if price > sma20 and distance_from_sma20 > 0.08:
-            return "extended"
-        return "neutral"
+        if value >= 1.5:
+            return "strong"
+        if value >= 1.0:
+            return "adequate"
+        return "weak"
 
-    def _risk_note(self, entry_quality: str, support_levels: list[float]) -> str:
-        if entry_quality == "extended":
-            return "Price is extended above short-term support; avoid chasing strength."
-        if support_levels:
-            return f"Monitor support near {round(support_levels[0], 2)} for pullback risk."
-        return "Use recent support levels to manage entry risk."
+    def _expectations_from_metrics(
+        self,
+        pe: float | None,
+        revenue_growth: float | None,
+        earnings_growth: float | None,
+    ) -> list[str]:
+        expectations: list[str] = []
+        if pe is not None and pe >= 35:
+            expectations.append("Market is pricing in sustained premium growth.")
+        if revenue_growth is not None and revenue_growth >= 0.15:
+            expectations.append("Revenue growth expectations remain elevated.")
+        if earnings_growth is not None and earnings_growth >= 0.15:
+            expectations.append("Profit growth needs to remain strong to justify valuation.")
+        return expectations[:3]
 
 
 @dataclass(slots=True)
