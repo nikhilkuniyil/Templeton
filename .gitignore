@@ -1,3 +1,4 @@
 .pytest_cache/
 __pycache__/
 *.pyc
+multi_agent_stock_system.md
