@@ -4,6 +4,7 @@ from stock_researcher.connectors import (
     StaticMarketDataClient,
     StaticNewsClient,
 )
+from stock_researcher.agents import AgentRuntime
 from stock_researcher.models import AgentEnvelope, ResearchRequest, SourceDocument
 from stock_researcher.orchestrator import InvestigationOrchestrator
 from stock_researcher.validation import ValidationError
@@ -108,6 +109,32 @@ def test_investigation_orchestrator_rejects_invalid_payloads() -> None:
         pass
     else:
         raise AssertionError("Expected ValidationError for invalid payload")
+
+
+def test_agent_runtime_executes_real_source_verification_agent() -> None:
+    request = ResearchRequest(
+        request_id="req_005",
+        user_query="Investigate ASML",
+        mode="investigation",
+        tickers=["ASML"],
+    )
+    connectors = ConnectorBundle(
+        filings=StaticFilingsClient(
+            {"ASML": [_source_doc("ASML annual report", "company_filing_or_release", "ASML")]}
+        ),
+        market_data=StaticMarketDataClient(
+            {"ASML": [_source_doc("ASML price history", "market_data", "ASML")]}
+        ),
+        news=StaticNewsClient({"ASML": [_source_doc("ASML news item", "news", "ASML")]}),
+    )
+    runtime = AgentRuntime()
+
+    run = InvestigationOrchestrator(connectors=connectors).run(request, agent_executor=runtime.execute)
+
+    source_output = run.outputs["source_verification"]
+    assert source_output.payload["freshness_status"] == "fresh"
+    assert len(source_output.payload["sources_used"]) == 3
+    assert run.outputs["router_planner"].payload["mode"] == "investigation"
 
 
 def _source_doc(name: str, source_type: str, ticker: str) -> SourceDocument:
