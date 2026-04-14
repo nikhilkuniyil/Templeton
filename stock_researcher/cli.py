@@ -15,6 +15,7 @@ from .connectors import (
     YahooFinanceNewsClient,
 )
 from .conversation import ConversationalInterface
+from .benchmarks import BenchmarkHarness, format_suite_result
 from .demo_data import demo_connector_bundle
 from .models import AgentEnvelope, ResearchRequest
 from .orchestrator import InvestigationOrchestrator
@@ -61,6 +62,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="User-Agent header for SEC requests",
     )
 
+    benchmark = subparsers.add_parser("benchmark", help="Run the local benchmark suite")
+    benchmark.add_argument(
+        "--suite",
+        default=None,
+        help="Optional path to a benchmark suite JSON file",
+    )
+    benchmark.add_argument(
+        "--store-dir",
+        default=".templeton",
+        help="Local directory for benchmark run artifacts",
+    )
+    benchmark.add_argument("--json", action="store_true", help="Print raw JSON output")
+
     return parser
 
 
@@ -72,6 +86,8 @@ def main(argv: list[str] | None = None) -> int:
         return _handle_investigate(args)
     if args.command == "chat":
         return _handle_chat(args)
+    if args.command == "benchmark":
+        return _handle_benchmark(args)
     parser.error(f"Unknown command: {args.command}")
     return 2
 
@@ -157,6 +173,16 @@ def _handle_chat(args) -> int:
 
 def _run_to_dict(outputs: dict[str, AgentEnvelope]) -> dict[str, dict]:
     return {name: envelope.to_dict() for name, envelope in outputs.items()}
+
+
+def _handle_benchmark(args) -> int:
+    harness = BenchmarkHarness(run_store=LocalRunStore(args.store_dir))
+    result = harness.run_suite(args.suite)
+    if args.json:
+        print(json.dumps(result.to_dict(), indent=2))
+        return 0
+    print(format_suite_result(result))
+    return 0
 
 
 def _connector_bundle_from_args(args) -> ConnectorBundle | None:

@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "suite_name": "templeton_demo_baseline",
+  "cases": [
+    {
+      "case_id": "asml_long_term_demo",
+      "ticker": "ASML",
+      "query": "Is ASML worth buying for a long-term investor?",
+      "time_horizon": "long_term",
+      "objective": "long_term_compounding",
+      "mode": "investigation",
+      "expected": {
+        "decision": "watch",
+        "freshness_status": "fresh",
+        "business_model_contains": [
+          "lithography",
+          "services"
+        ],
+        "risk_contains": [
+          "capex"
+        ],
+        "valuation_label": "fair_to_expensive",
+        "technical_entry_quality": "neutral",
+        "minimum_evidence_ids": 3
+      }
+    },
+    {
+      "case_id": "nvda_long_term_demo",
+      "ticker": "NVDA",
+      "query": "Is NVDA worth buying for a long-term investor?",
+      "time_horizon": "long_term",
+      "objective": "long_term_compounding",
+      "mode": "investigation",
+      "expected": {
+        "decision": "watch",
+        "freshness_status": "fresh",
+        "business_model_contains": [
+          "accelerated computing",
+          "software"
+        ],
+        "risk_contains": [
+          "customer",
+          "valuation"
+        ],
+        "valuation_label": "expensive",
+        "technical_entry_quality": "extended",
+        "minimum_evidence_ids": 3
+      }
+    }
+  ]
+}

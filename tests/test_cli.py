@@ -34,3 +34,13 @@ def test_cli_chat_uses_saved_history_without_refresh(capsys, tmp_path) -> None:
     captured = capsys.readouterr()
     assert exit_code == 0
     assert "Prior research leans WATCH" in captured.out
+
+
+def test_cli_benchmark_outputs_summary(capsys, tmp_path) -> None:
+    exit_code = main(["benchmark", "--store-dir", str(tmp_path)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Benchmark suite:" in captured.out
+    assert "Cases passed:" in captured.out
+    assert "asml_long_term_demo [PASS]" in captured.out
