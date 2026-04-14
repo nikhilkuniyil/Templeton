@@ -11,6 +11,7 @@ from .agents import AgentRuntime
 from .connectors import (
     ConnectorBundle,
     ConnectorError,
+    FinancialDatasetsFilingsClient,
     FinancialDatasetsMarketDataClient,
     SecCompanyFactsMarketDataClient,
     SecFilingsClient,
@@ -214,8 +215,13 @@ def _connector_bundle_from_args(args) -> ConnectorBundle | None:
             raise ConnectorError(
                 "FINANCIAL_DATASETS_API_KEY is not set. Export it before using --financial-datasets."
             )
+        sec_fallback = SecFilingsClient(user_agent=args.sec_user_agent)
         return ConnectorBundle(
-            filings=SecFilingsClient(user_agent=args.sec_user_agent),
+            filings=FinancialDatasetsFilingsClient(
+                api_key=api_key,
+                user_agent=args.sec_user_agent,
+                fallback_client=sec_fallback,
+            ),
             market_data=FinancialDatasetsMarketDataClient(api_key=api_key),
             news=YahooFinanceNewsClient(user_agent=args.sec_user_agent),
         )

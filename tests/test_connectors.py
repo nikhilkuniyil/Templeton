@@ -3,6 +3,7 @@ from urllib.error import HTTPError
 import pytest
 
 from stock_researcher.connectors import (
+    FinancialDatasetsFilingsClient,
     FinancialDatasetsMarketDataClient,
     SecCompanyFactsMarketDataClient,
     SecFilingsClient,
@@ -304,6 +305,67 @@ def test_financial_datasets_market_data_client_derives_metadata() -> None:
     assert metadata["current_valuation"]["market_cap"] == 2900000000000
     assert metadata["technical_analysis"]["entry_quality"] in {"constructive", "neutral", "extended"}
     assert metadata["data_provider"] == "financialdatasets"
+
+
+def test_financial_datasets_filings_client_derives_item_based_metadata() -> None:
+    def fake_fetch(url: str, headers: dict[str, str]) -> dict:
+        assert headers["X-API-KEY"] == "test-key"
+        if "filings/items" in url:
+            return {
+                "resource": "filing_items",
+                "ticker": "NVDA",
+                "filing_type": "10-K",
+                "year": 2025,
+                "items": [
+                    {
+                        "number": "Item 1",
+                        "title": "Business",
+                        "text": (
+                            "NVIDIA pioneered accelerated computing and provides full-stack platforms spanning "
+                            "GPUs, networking, software libraries, and AI infrastructure."
+                        ),
+                    },
+                    {
+                        "number": "Item 7",
+                        "title": "MD&A",
+                        "text": (
+                            "Revenue growth depends on continued data center demand, hyperscaler capacity "
+                            "expansion, and adoption of accelerated computing systems."
+                        ),
+                    },
+                    {
+                        "number": "Item 1A",
+                        "title": "Risk Factors",
+                        "text": (
+                            "We depend on supply-chain and manufacturing partners, and production constraints "
+                            "could adversely affect our ability to meet customer demand."
+                        ),
+                    },
+                ],
+            }
+        return {
+            "filings": [
+                {
+                    "accession_number": "0001045810-25-000023",
+                    "filing_type": "10-K",
+                    "report_date": "2025-01-26",
+                    "filing_date": "2025-02-26",
+                    "ticker": "NVDA",
+                    "url": "https://www.sec.gov/example",
+                }
+            ]
+        }
+
+    client = FinancialDatasetsFilingsClient(api_key="test-key", fetch_json=fake_fetch)
+    docs = client.get_company_filings("NVDA")
+
+    assert len(docs) == 1
+    metadata = docs[0].metadata
+    assert metadata["data_provider"] == "financialdatasets"
+    assert "accelerated computing" in metadata["business_model"].lower()
+    assert any("hyperscaler capacity expansion" in item.lower() for item in metadata["revenue_drivers"])
+    assert metadata["core_risks"]
+    assert "customer demand" in metadata["core_risks"][0]["risk"].lower()
 
 
 def test_yahoo_finance_news_client_parses_rss_items() -> None:

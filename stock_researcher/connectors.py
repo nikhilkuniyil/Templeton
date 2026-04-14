@@ -231,6 +231,71 @@ class MarketDataDerivationMixin:
 
 
 @dataclass(slots=True)
+class FilingExtractionMixin:
+    """Shared helpers for turning filing text into structured metadata."""
+
+    def _enrich_form_metadata(self, company_name: str, form: str, sic_description: str) -> dict:
+        metadata: dict[str, object] = {}
+        sector_hint = f" in {sic_description}" if sic_description else ""
+        if form in {"10-K", "20-F", "40-F"}:
+            metadata["business_model"] = (
+                f"{company_name} operates{sector_hint} and its annual report should contain the clearest description of its business model, end markets, and risks."
+            )
+            metadata["competitive_advantages"] = [
+                "Primary annual company filing available for review",
+                "Management business description available in the filing set",
+            ]
+            metadata["vulnerabilities"] = [
+                "Detailed filing text extraction is still heuristic in live mode",
+            ]
+            metadata["event_type"] = "annual_report"
+            metadata["expected_impact"] = "high"
+        elif form in {"10-Q", "6-K"}:
+            metadata["positive_catalysts"] = ["Quarterly update available"]
+            metadata["negative_catalysts"] = ["Quarterly filing may contain changed risk disclosures"]
+            metadata["event_type"] = "quarterly_update"
+            metadata["expected_impact"] = "medium"
+        elif form == "8-K":
+            metadata["positive_catalysts"] = ["Current report may include material corporate updates"]
+            metadata["negative_catalysts"] = ["Current report may disclose adverse developments"]
+            metadata["event_type"] = "current_report"
+            metadata["expected_impact"] = "medium"
+        return metadata
+
+    def _extract_metadata_from_sections(
+        self,
+        company_name: str,
+        business_section: str,
+        mdna_section: str,
+        risk_section: str,
+    ) -> dict:
+        extractor = SecFilingsClient()
+        business_model = extractor._extract_business_model(company_name, business_section)
+        revenue_drivers = extractor._extract_revenue_drivers(
+            "\n".join(part for part in (business_section, mdna_section) if part)
+        )
+        competitive_advantages = extractor._extract_competitive_advantages(business_section)
+        vulnerabilities = extractor._extract_risk_items(risk_section)
+        core_risks = [
+            {"risk": item, "severity": "medium", "likelihood": "medium"} for item in vulnerabilities[:3]
+        ]
+
+        metadata: dict[str, object] = {}
+        if business_model:
+            metadata["business_model"] = business_model
+        if revenue_drivers:
+            metadata["revenue_drivers"] = revenue_drivers
+        if competitive_advantages:
+            metadata["competitive_advantages"] = competitive_advantages
+        if vulnerabilities:
+            metadata["vulnerabilities"] = vulnerabilities
+            metadata["core_risks"] = core_risks
+            metadata["thesis_breakers"] = vulnerabilities[:2]
+            metadata["monitoring_indicators"] = extractor._monitoring_indicators_from_risks(vulnerabilities)
+        return metadata
+
+
+@dataclass(slots=True)
 class SecTickerResolver:
     """Shared SEC ticker-to-CIK lookup helper."""
 
@@ -253,7 +318,7 @@ class SecTickerResolver:
 
 
 @dataclass(slots=True)
-class SecFilingsClient(SecTickerResolver):
+class SecFilingsClient(SecTickerResolver, FilingExtractionMixin):
     """Fetches recent SEC filings from official SEC JSON endpoints."""
     fetch_bytes: Callable[[str, dict[str, str]], bytes] = default_bytes_fetcher
 
@@ -328,34 +393,6 @@ class SecFilingsClient(SecTickerResolver):
         digits = filing_date.replace("-", "")
         return int(digits) if digits.isdigit() else 0
 
-    def _enrich_form_metadata(self, company_name: str, form: str, sic_description: str) -> dict:
-        metadata: dict[str, object] = {}
-        sector_hint = f" in {sic_description}" if sic_description else ""
-        if form in {"10-K", "20-F", "40-F"}:
-            metadata["business_model"] = (
-                f"{company_name} operates{sector_hint} and its annual report should contain the clearest description of its business model, end markets, and risks."
-            )
-            metadata["competitive_advantages"] = [
-                "Primary annual company filing available for review",
-                "Management business description available in the filing set",
-            ]
-            metadata["vulnerabilities"] = [
-                "Detailed filing text extraction is still heuristic in live mode",
-            ]
-            metadata["event_type"] = "annual_report"
-            metadata["expected_impact"] = "high"
-        elif form in {"10-Q", "6-K"}:
-            metadata["positive_catalysts"] = ["Quarterly update available"]
-            metadata["negative_catalysts"] = ["Quarterly filing may contain changed risk disclosures"]
-            metadata["event_type"] = "quarterly_update"
-            metadata["expected_impact"] = "medium"
-        elif form == "8-K":
-            metadata["positive_catalysts"] = ["Current report may include material corporate updates"]
-            metadata["negative_catalysts"] = ["Current report may disclose adverse developments"]
-            metadata["event_type"] = "current_report"
-            metadata["expected_impact"] = "medium"
-        return metadata
-
     def _extract_filing_metadata(self, company_name: str, form: str, filing_url: str) -> dict:
         try:
             raw = self.fetch_bytes(filing_url, self._headers()).decode("utf-8", errors="ignore")
@@ -370,28 +407,12 @@ class SecFilingsClient(SecTickerResolver):
         business_section = sections.get("business", "")
         mdna_section = sections.get("mdna", "")
         risk_section = sections.get("risk", "")
-
-        business_model = self._extract_business_model(company_name, business_section)
-        revenue_drivers = self._extract_revenue_drivers("\n".join(part for part in (business_section, mdna_section) if part))
-        competitive_advantages = self._extract_competitive_advantages(business_section)
-        vulnerabilities = self._extract_risk_items(risk_section)
-        core_risks = [
-            {"risk": item, "severity": "medium", "likelihood": "medium"} for item in vulnerabilities[:3]
-        ]
-
-        metadata: dict[str, object] = {}
-        if business_model:
-            metadata["business_model"] = business_model
-        if revenue_drivers:
-            metadata["revenue_drivers"] = revenue_drivers
-        if competitive_advantages:
-            metadata["competitive_advantages"] = competitive_advantages
-        if vulnerabilities:
-            metadata["vulnerabilities"] = vulnerabilities
-            metadata["core_risks"] = core_risks
-            metadata["thesis_breakers"] = vulnerabilities[:2]
-            metadata["monitoring_indicators"] = self._monitoring_indicators_from_risks(vulnerabilities)
-        return metadata
+        return self._extract_metadata_from_sections(
+            company_name=company_name,
+            business_section=business_section,
+            mdna_section=mdna_section,
+            risk_section=risk_section,
+        )
 
     def _normalize_filing_text(self, raw_html: str) -> str:
         text = re.sub(r"(?is)<script.*?>.*?</script>", " ", raw_html)
@@ -1149,6 +1170,177 @@ class FinancialDatasetsMarketDataClient(MarketDataDerivationMixin):
         if earnings_growth is not None and earnings_growth >= 0.15:
             expectations.append("Profit growth needs to remain strong to justify valuation.")
         return expectations[:3]
+
+
+@dataclass(slots=True)
+class FinancialDatasetsFilingsClient(FilingExtractionMixin):
+    """Fetches filing metadata and item sections from Financial Datasets, with SEC fallback."""
+
+    api_key: str
+    fetch_json: Callable[[str, dict[str, str]], dict] = default_url_fetcher
+    base_url: str = "https://api.financialdatasets.ai"
+    user_agent: str = "TempletonResearch/0.1 (contact: local@example.com)"
+    fallback_client: FilingsClient | None = None
+
+    def get_company_filings(self, ticker: str) -> list[SourceDocument]:
+        symbol = ticker.upper()
+        try:
+            filing_records = self._fetch_filings(symbol)
+            if not filing_records:
+                return self._fallback(symbol)
+            return self._documents_from_filings(symbol, filing_records)
+        except (HTTPError, URLError, ValueError, KeyError) as exc:
+            if self.fallback_client is not None:
+                return self._fallback(symbol)
+            raise ConnectorError(
+                f"Financial Datasets filings lookup failed for {symbol}: {exc}"
+            ) from exc
+
+    def _fetch_filings(self, ticker: str) -> list[dict]:
+        urls = [
+            f"{self.base_url}/filings?ticker={ticker}&filing_type=10-K",
+            f"{self.base_url}/filings?ticker={ticker}&filing_type=20-F",
+            f"{self.base_url}/filings?ticker={ticker}&filing_type=40-F",
+            f"{self.base_url}/filings?ticker={ticker}&filing_type=10-Q",
+            f"{self.base_url}/filings?ticker={ticker}&filing_type=8-K",
+            f"{self.base_url}/filings?ticker={ticker}&filing_type=6-K",
+        ]
+        records: list[dict] = []
+        seen: set[tuple[str, str]] = set()
+        for url in urls:
+            payload = self.fetch_json(url, self._headers())
+            for item in payload.get("filings", []):
+                if not isinstance(item, dict):
+                    continue
+                key = (str(item.get("accession_number", "")), str(item.get("filing_type", "")))
+                if key in seen:
+                    continue
+                seen.add(key)
+                records.append(item)
+        prioritized = sorted(
+            records,
+            key=lambda item: (
+                self._form_priority(str(item.get("filing_type", ""))),
+                -self._date_rank(str(item.get("filing_date", ""))),
+            ),
+            reverse=False,
+        )
+        return prioritized[:8]
+
+    def _documents_from_filings(self, ticker: str, filings: list[dict]) -> list[SourceDocument]:
+        docs: list[SourceDocument] = []
+        retrieved_at = datetime.now(timezone.utc).isoformat()
+        for filing in filings:
+            form = str(filing.get("filing_type", ""))
+            filing_date = str(filing.get("filing_date", "")) or str(filing.get("report_date", ""))
+            report_date = str(filing.get("report_date", ""))
+            filing_url = str(filing.get("url", ""))
+            accession_number = str(filing.get("accession_number", ""))
+            company_name = ticker
+            metadata = {
+                "company_name": company_name,
+                "form": form,
+                "filing_date": filing_date,
+                "report_date": report_date,
+                "accession_number": accession_number,
+                "data_provider": "financialdatasets",
+            }
+            metadata.update(self._enrich_form_metadata(company_name=company_name, form=form, sic_description=""))
+            if form in {"10-K", "20-F", "40-F", "10-Q"}:
+                metadata.update(self._extract_items_metadata(ticker, form, report_date, filing_url))
+            docs.append(
+                SourceDocument(
+                    source_name=f"{ticker} {form}",
+                    source_type="company_filing_or_release",
+                    source_url=filing_url,
+                    published_at=f"{filing_date}T00:00:00Z" if filing_date else retrieved_at,
+                    retrieved_at=retrieved_at,
+                    ticker=ticker,
+                    metadata=metadata,
+                )
+            )
+        return docs
+
+    def _extract_items_metadata(
+        self,
+        ticker: str,
+        form: str,
+        report_date: str,
+        filing_url: str,
+    ) -> dict:
+        year = self._date_rank(report_date) // 10000 if self._date_rank(report_date) else 0
+        if year <= 0:
+            return {}
+        payload = self.fetch_json(
+            f"{self.base_url}/filings/items?ticker={ticker}&filing_type={form}&year={year}",
+            self._headers(),
+        )
+        items = payload.get("items", [])
+        if not isinstance(items, list):
+            return {}
+        item_text = {
+            str(item.get("number", "")).lower().replace(".", "").strip(): str(item.get("text", ""))
+            for item in items
+            if isinstance(item, dict)
+        }
+        business_section = ""
+        mdna_section = ""
+        risk_section = ""
+        if form in {"20-F", "40-F"}:
+            business_section = item_text.get("item 4", "")
+            mdna_section = item_text.get("item 5", "")
+            risk_section = item_text.get("item 3d", "") or item_text.get("item 3", "")
+        elif form == "10-Q":
+            mdna_section = item_text.get("item 2", "")
+            risk_section = item_text.get("item 1a", "")
+        else:
+            business_section = item_text.get("item 1", "")
+            mdna_section = item_text.get("item 7", "")
+            risk_section = item_text.get("item 1a", "")
+        if not any((business_section, mdna_section, risk_section)):
+            return {}
+        company_name = self._company_name_from_sections(ticker, business_section, mdna_section)
+        metadata = self._extract_metadata_from_sections(
+            company_name=company_name,
+            business_section=business_section,
+            mdna_section=mdna_section,
+            risk_section=risk_section,
+        )
+        if not metadata and filing_url:
+            metadata["source_url"] = filing_url
+        return metadata
+
+    def _headers(self) -> dict[str, str]:
+        return {
+            "X-API-KEY": self.api_key,
+            "Accept": "application/json",
+            "User-Agent": self.user_agent,
+        }
+
+    def _form_priority(self, form: str) -> int:
+        if form in {"10-K", "20-F", "40-F"}:
+            return 0
+        if form in {"10-Q"}:
+            return 1
+        if form in {"8-K", "6-K"}:
+            return 2
+        return 3
+
+    def _date_rank(self, filing_date: str) -> int:
+        digits = filing_date.replace("-", "")
+        return int(digits) if digits.isdigit() else 0
+
+    def _fallback(self, ticker: str) -> list[SourceDocument]:
+        if self.fallback_client is None:
+            return []
+        return self.fallback_client.get_company_filings(ticker)
+
+    def _company_name_from_sections(self, ticker: str, business_section: str, mdna_section: str) -> str:
+        text = business_section or mdna_section
+        match = re.match(r"\s*([A-Z][A-Za-z0-9&.\-]+(?:\s+[A-Z][A-Za-z0-9&.\-]+){0,3})\b", text)
+        if match:
+            return match.group(1).strip()
+        return ticker
 
 
 @dataclass(slots=True)
