@@ -101,6 +101,52 @@ def test_sec_filings_client_filters_glossary_and_boilerplate_noise() -> None:
     assert "supply-chain partners" in metadata["core_risks"][0]["risk"].lower()
 
 
+def test_sec_filings_client_uses_real_section_body_not_table_of_contents() -> None:
+    def fake_fetch(url: str, headers: dict[str, str]) -> dict:
+        if url.endswith("company_tickers.json"):
+            return {"0": {"ticker": "ASML", "cik_str": 937966}}
+        return {
+            "name": "ASML HOLDING NV",
+            "filings": {
+                "recent": {
+                    "accessionNumber": ["0000937966-24-000001"],
+                    "form": ["20-F"],
+                    "filingDate": ["2026-02-01"],
+                    "primaryDocument": ["asml-20260201x20f.htm"],
+                }
+            },
+        }
+
+    def fake_fetch_bytes(url: str, headers: dict[str, str]) -> bytes:
+        return b"""
+        <html><body>
+        <div>Table of Contents</div>
+        <div>Item 4. Information on the Company</div>
+        <div>Item 3D. Risk Factors</div>
+        <h1>Item 4. Information on the Company</h1>
+        <p>ASML designs and manufactures lithography systems and computational patterning software for semiconductor manufacturers worldwide.</p>
+        <p>Revenue is driven by extreme ultraviolet systems, deep ultraviolet systems, and the service and upgrade needs of the installed base.</p>
+        <h1>Item 5. Operating and Financial Review and Prospects</h1>
+        <p>Net sales growth also depends on customer capacity additions and the pace of advanced-node logic and memory investments.</p>
+        <h1>Item 3D. Risk Factors</h1>
+        <p>Export controls and trade restrictions could materially reduce system shipments to certain end markets.</p>
+        </body></html>
+        """
+
+    client = SecFilingsClient(
+        user_agent="TempletonTest/0.1",
+        fetch_json=fake_fetch,
+        fetch_bytes=fake_fetch_bytes,
+    )
+
+    docs = client.get_company_filings("ASML")
+    metadata = docs[0].metadata
+
+    assert "designs and manufactures lithography systems" in metadata["business_model"].lower()
+    assert any("customer capacity additions" in item.lower() for item in metadata["revenue_drivers"])
+    assert "export controls" in metadata["core_risks"][0]["risk"].lower()
+
+
 def test_sec_filings_client_wraps_http_errors() -> None:
     def fake_fetch(url: str, headers: dict[str, str]) -> dict:
         raise HTTPError(url, 404, "Not Found", hdrs=None, fp=None)

@@ -239,19 +239,13 @@ class SecFilingsClient(SecTickerResolver):
         if not text:
             return {}
 
-        business_section = self._extract_section(
-            text=text,
-            start_patterns=self._business_start_patterns(form),
-            end_patterns=self._business_end_patterns(form),
-        )
-        risk_section = self._extract_section(
-            text=text,
-            start_patterns=self._risk_start_patterns(form),
-            end_patterns=self._risk_end_patterns(form),
-        )
+        sections = self._extract_filing_sections(text=text, form=form)
+        business_section = sections.get("business", "")
+        mdna_section = sections.get("mdna", "")
+        risk_section = sections.get("risk", "")
 
         business_model = self._extract_business_model(company_name, business_section)
-        revenue_drivers = self._extract_revenue_drivers(business_section)
+        revenue_drivers = self._extract_revenue_drivers("\n".join(part for part in (business_section, mdna_section) if part))
         competitive_advantages = self._extract_competitive_advantages(business_section)
         vulnerabilities = self._extract_risk_items(risk_section)
         core_risks = [
@@ -277,50 +271,104 @@ class SecFilingsClient(SecTickerResolver):
         text = re.sub(r"(?is)<style.*?>.*?</style>", " ", text)
         text = re.sub(r"(?is)<!--.*?-->", " ", text)
         text = re.sub(r"(?i)<br\s*/?>", "\n", text)
-        text = re.sub(r"(?i)</p>", "\n", text)
+        text = re.sub(r"(?i)</?(p|div|tr|li|ul|ol|table|section|article)\b[^>]*>", "\n", text)
+        text = re.sub(r"(?i)</?(h[1-6]|title)\b[^>]*>", "\n", text)
         text = re.sub(r"<[^>]+>", " ", text)
         text = html.unescape(text)
         text = re.sub(r"&nbsp;|&#160;", " ", text)
-        text = re.sub(r"\s+", " ", text)
-        return text.strip()
+        lines = [re.sub(r"\s+", " ", line).strip() for line in text.splitlines()]
+        return "\n".join(line for line in lines if line)
 
-    def _extract_section(self, text: str, start_patterns: list[str], end_patterns: list[str]) -> str:
-        lowered = text.lower()
-        start_index = 0
-        for pattern in start_patterns:
-            match = re.search(pattern, lowered)
-            if match:
-                start_index = match.start()
-                break
-        snippet = text[start_index:start_index + 30000]
-        snippet_lower = snippet.lower()
-        end_index = len(snippet)
-        for pattern in end_patterns:
-            match = re.search(pattern, snippet_lower)
-            if match and match.start() > 200:
-                end_index = match.start()
-                break
-        return snippet[:end_index].strip()
+    def _extract_filing_sections(self, text: str, form: str) -> dict[str, str]:
+        headings = self._section_heading_patterns(form)
+        sections: dict[str, list[str]] = {name: [] for name in headings}
+        active_section: str | None = None
+        current_lines: list[str] = []
 
-    def _business_start_patterns(self, form: str) -> list[str]:
+        def flush_section() -> None:
+            nonlocal active_section, current_lines
+            if active_section is None:
+                current_lines = []
+                return
+            content = "\n".join(current_lines).strip()
+            if content:
+                sections[active_section].append(content)
+            current_lines = []
+
+        for line in text.splitlines():
+            normalized = line.strip()
+            if not normalized:
+                continue
+            heading_name = self._classify_section_heading(normalized, headings)
+            if heading_name is not None:
+                flush_section()
+                active_section = heading_name
+                current_lines = []
+                continue
+            if active_section is not None:
+                current_lines.append(normalized)
+        flush_section()
+
+        resolved: dict[str, str] = {}
+        for section_name, candidates in sections.items():
+            if not candidates:
+                continue
+            resolved[section_name] = max(candidates, key=lambda item: len(item))
+        return resolved
+
+    def _section_heading_patterns(self, form: str) -> dict[str, list[str]]:
         if form in {"20-F", "40-F"}:
-            return [r"item\s+4\W+information on the company", r"business overview", r"information on the company"]
-        return [r"item\s+1\W+business", r"business overview", r"our business"]
+            return {
+                "business": [
+                    r"item\s+4\W+information on the company",
+                    r"information on the company",
+                    r"business overview",
+                ],
+                "mdna": [
+                    r"item\s+5\W+operating and financial review",
+                    r"operating and financial review",
+                ],
+                "risk": [
+                    r"item\s+3d?\W+risk factors",
+                    r"risk factors",
+                ],
+            }
+        return {
+            "business": [
+                r"item\s+1\W+business",
+                r"business overview",
+                r"our business",
+            ],
+            "mdna": [
+                r"item\s+7\W+management['’]s discussion and analysis",
+                r"management['’]s discussion and analysis",
+                r"md&a",
+            ],
+            "risk": [
+                r"item\s+1a\W+risk factors",
+                r"risk factors",
+            ],
+        }
 
-    def _business_end_patterns(self, form: str) -> list[str]:
-        if form in {"20-F", "40-F"}:
-            return [r"item\s+4a", r"item\s+5", r"risk factors"]
-        return [r"item\s+1a\W+risk factors", r"item\s+1b", r"item\s+2"]
-
-    def _risk_start_patterns(self, form: str) -> list[str]:
-        if form in {"20-F", "40-F"}:
-            return [r"risk factors", r"item\s+3\W+key information"]
-        return [r"item\s+1a\W+risk factors", r"risk factors"]
-
-    def _risk_end_patterns(self, form: str) -> list[str]:
-        if form in {"20-F", "40-F"}:
-            return [r"item\s+4\W+information on the company", r"item\s+5", r"item\s+6"]
-        return [r"item\s+1b", r"item\s+2", r"item\s+3"]
+    def _classify_section_heading(
+        self,
+        line: str,
+        headings: dict[str, list[str]],
+    ) -> str | None:
+        normalized = re.sub(r"\s+", " ", line.lower()).strip(" .:-")
+        if len(normalized) > 140:
+            return None
+        if normalized.count(".") > 3:
+            return None
+        if normalized.count(",") > 2:
+            return None
+        if any(term in normalized for term in ("table of contents", "index", "cross reference")):
+            return None
+        for section_name, patterns in headings.items():
+            for pattern in patterns:
+                if re.fullmatch(pattern, normalized):
+                    return section_name
+        return None
 
     def _extract_business_model(self, company_name: str, section: str) -> str | None:
         company_token = company_name.lower().split()[0]
@@ -414,7 +462,7 @@ class SecFilingsClient(SecTickerResolver):
         return indicators[:4]
 
     def _sentences(self, text: str) -> list[str]:
-        pieces = re.split(r"(?<=[.!?])\s+", text)
+        pieces = re.split(r"(?<=[.!?])\s+", text.replace("\n", " "))
         cleaned = []
         for piece in pieces:
             normalized = piece.strip()
