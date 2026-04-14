@@ -17,6 +17,7 @@ class DecisionPortfolioFitAgent:
         ticker = request.tickers[0]
         business = prior_outputs.get("business_quality")
         financial = prior_outputs.get("financial_quality")
+        technical = prior_outputs.get("technical_analysis")
         valuation = prior_outputs.get("valuation")
         risk = prior_outputs.get("risk")
         source_verification = prior_outputs.get("source_verification")
@@ -26,6 +27,7 @@ class DecisionPortfolioFitAgent:
         quality_high = business_rating == "high" and financial_rating == "high"
         quality_supported = business_rating in {"medium", "high"} and financial_rating in {"medium", "high"}
         valuation_label = valuation.payload.get("valuation_label") if valuation is not None else "unknown"
+        entry_quality = technical.payload.get("entry_quality") if technical is not None else "unknown"
         freshness = source_verification.payload.get("freshness_status") if source_verification is not None else "unknown"
         top_risk = ""
         if risk is not None and risk.payload.get("core_risks"):
@@ -55,6 +57,13 @@ class DecisionPortfolioFitAgent:
             decision = "pass"
             confidence = "low"
             reasons = ["The current evidence base is not strong enough to justify a buy decision."]
+
+        if entry_quality == "extended":
+            reasons.append("Technical entry looks extended, which argues against chasing the current price.")
+            if decision == "buy":
+                decision = "watch"
+        elif entry_quality == "constructive":
+            reasons.append("Technical setup looks constructive for monitoring or staged entry.")
 
         if top_risk:
             reasons.append(f"Top risk: {top_risk}.")

@@ -9,6 +9,7 @@ from .router_planner import RouterPlannerAgent
 from .runtime import AgentRuntime
 from .source_verification import SourceVerificationAgent
 from .synthesizer import SynthesizerAgent
+from .technical_analysis import TechnicalAnalysisAgent
 from .valuation import ValuationAgent
 
 __all__ = [
@@ -21,5 +22,6 @@ __all__ = [
     "RouterPlannerAgent",
     "SourceVerificationAgent",
     "SynthesizerAgent",
+    "TechnicalAnalysisAgent",
     "ValuationAgent",
 ]

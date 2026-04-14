@@ -6,6 +6,7 @@ INVESTIGATION_AGENT_ORDER = [
     "business_quality",
     "financial_quality",
     "valuation",
+    "technical_analysis",
     "news_catalyst",
     "risk",
     "decision_portfolio_fit",
@@ -38,6 +39,11 @@ Differentiate durable strength from temporary accounting noise.
 You are the Valuation Agent.
 Judge whether the stock is cheap, fair, or expensive based on assumptions that you state explicitly.
 Do not rely on raw multiples without context.
+""".strip(),
+    "technical_analysis": """
+You are the Technical Analysis Agent.
+Assess trend, momentum, support and resistance, and whether the current setup offers a constructive entry.
+Technicals should inform timing and risk management, not override weak fundamentals.
 """.strip(),
     "news_catalyst": """
 You are the News / Catalyst Agent.

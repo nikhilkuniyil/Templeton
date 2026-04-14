@@ -13,6 +13,7 @@ from .risk import RiskAgent
 from .router_planner import RouterPlannerAgent
 from .source_verification import SourceVerificationAgent
 from .synthesizer import SynthesizerAgent
+from .technical_analysis import TechnicalAnalysisAgent
 from .valuation import ValuationAgent
 
 
@@ -28,6 +29,7 @@ class AgentRuntime:
         self.router_planner = RouterPlannerAgent()
         self.source_verification = SourceVerificationAgent()
         self.synthesizer = SynthesizerAgent()
+        self.technical_analysis = TechnicalAnalysisAgent()
         self.valuation = ValuationAgent()
 
     def execute(
@@ -55,6 +57,12 @@ class AgentRuntime:
             )
         if agent_name == "valuation":
             return self.valuation.run(
+                request=request,
+                source_packets=source_packets,
+                prior_outputs=prior_outputs,
+            )
+        if agent_name == "technical_analysis":
+            return self.technical_analysis.run(
                 request=request,
                 source_packets=source_packets,
                 prior_outputs=prior_outputs,
@@ -146,6 +154,20 @@ class AgentRuntime:
                 "positive_catalysts": [],
                 "negative_catalysts": [],
                 "recent_events": [],
+                "evidence_ids": [],
+                "confidence": "low",
+                "open_questions": ["Agent not implemented yet."],
+            }
+        elif agent_name == "technical_analysis":
+            payload = {
+                "agent_name": agent_name,
+                "ticker": ticker,
+                "summary": summary,
+                "trend": "unknown",
+                "momentum": "unknown",
+                "key_levels": {"support": [], "resistance": []},
+                "entry_quality": "unknown",
+                "risk_management_note": "Agent not implemented yet.",
                 "evidence_ids": [],
                 "confidence": "low",
                 "open_questions": ["Agent not implemented yet."],

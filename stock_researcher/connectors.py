@@ -437,20 +437,20 @@ class SecCompanyFactsMarketDataClient(SecTickerResolver):
         try:
             cik = self.lookup_cik(ticker)
             company_facts = self.fetch_json(self._companyfacts_url(cik), self._headers())
-            quote = self._fetch_quote(ticker)
-            return [self._document_from_companyfacts(ticker=ticker, company_facts=company_facts, quote=quote)]
+            chart = self._fetch_chart(ticker)
+            return [self._document_from_companyfacts(ticker=ticker, company_facts=company_facts, chart=chart)]
         except (HTTPError, URLError, ValueError, KeyError) as exc:
             raise ConnectorError(f"Live market-data lookup failed for {ticker.upper()}: {exc}") from exc
 
     def _companyfacts_url(self, cik: str) -> str:
         return f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
 
-    def _fetch_quote(self, ticker: str) -> dict:
+    def _fetch_chart(self, ticker: str) -> dict:
         headers = {"User-Agent": self.user_agent, "Accept": "application/json"}
-        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker.upper()}?range=1d&interval=1d"
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker.upper()}?range=1y&interval=1d"
         return self.quote_fetch_json(url, headers)
 
-    def _document_from_companyfacts(self, ticker: str, company_facts: dict, quote: dict) -> SourceDocument:
+    def _document_from_companyfacts(self, ticker: str, company_facts: dict, chart: dict) -> SourceDocument:
         facts_root = company_facts.get("facts", {})
         fact_sets = [namespace for namespace in (facts_root.get("us-gaap"), facts_root.get("ifrs-full")) if isinstance(namespace, dict)]
         revenue_series = self._series_any(
@@ -501,11 +501,13 @@ class SecCompanyFactsMarketDataClient(SecTickerResolver):
         latest_cash, _ = self._latest_pair(cash_series)
         latest_debt, _ = self._latest_pair(debt_series)
         latest_shares, _ = self._latest_pair(shares_series)
-        price = self._latest_price(quote)
+        price = self._latest_price(chart)
+        closes = self._closing_prices(chart)
 
         latest_margin = self._ratio(latest_gross, latest_revenue)
         previous_margin = self._ratio(previous_gross, previous_revenue)
         pe = self._compute_pe(price, latest_income, latest_shares)
+        technical_analysis = self._technical_metadata(closes=closes, price=price)
 
         metadata = {
             "growth_profile": {
@@ -536,6 +538,7 @@ class SecCompanyFactsMarketDataClient(SecTickerResolver):
             },
             "scenario_ranges": {},
             "market_implied_expectations": [],
+            "technical_analysis": technical_analysis,
         }
 
         company_name = str(company_facts.get("entityName", ticker.upper()))
@@ -587,7 +590,21 @@ class SecCompanyFactsMarketDataClient(SecTickerResolver):
         if not result:
             return None
         meta = result[0].get("meta", {})
-        return self._as_number(meta.get("regularMarketPrice"))
+        regular_market = self._as_number(meta.get("regularMarketPrice"))
+        if regular_market is not None:
+            return regular_market
+        closes = self._closing_prices(quote)
+        return closes[-1] if closes else None
+
+    def _closing_prices(self, chart: dict) -> list[float]:
+        result = chart.get("chart", {}).get("result", [])
+        if not result:
+            return []
+        indicators = result[0].get("indicators", {}).get("quote", [])
+        if not indicators:
+            return []
+        closes = indicators[0].get("close", [])
+        return [float(value) for value in closes if isinstance(value, (int, float))]
 
     def _as_number(self, value) -> float | None:
         return float(value) if isinstance(value, (int, float)) else None
@@ -655,6 +672,79 @@ class SecCompanyFactsMarketDataClient(SecTickerResolver):
         if cash is not None and debt > cash * 2:
             return "high"
         return "medium"
+
+    def _technical_metadata(self, closes: list[float], price: float | None) -> dict:
+        if not closes:
+            return {
+                "trend": "unknown",
+                "momentum": "unknown",
+                "key_levels": {"support": [], "resistance": []},
+                "entry_quality": "unknown",
+                "risk_management_note": "Insufficient price history for technical analysis.",
+            }
+        sma20 = self._sma(closes, 20)
+        sma50 = self._sma(closes, 50)
+        sma200 = self._sma(closes, 200)
+        recent_20 = closes[-20:] if len(closes) >= 20 else closes
+        recent_60 = closes[-60:] if len(closes) >= 60 else closes
+        current_price = price if price is not None else closes[-1]
+        trend = self._trend_label(current_price, sma50, sma200)
+        momentum = self._momentum_label(current_price, sma20, closes)
+        support = [level for level in (sma50, min(recent_60)) if isinstance(level, (int, float))]
+        resistance = [level for level in (max(recent_20), max(closes)) if isinstance(level, (int, float))]
+        entry_quality = self._entry_quality(current_price, sma20, sma50)
+        return {
+            "trend": trend,
+            "momentum": momentum,
+            "key_levels": {
+                "support": [round(level, 2) for level in support[:2]],
+                "resistance": [round(level, 2) for level in resistance[:2]],
+            },
+            "entry_quality": entry_quality,
+            "risk_management_note": self._risk_note(entry_quality, support[:2]),
+        }
+
+    def _sma(self, closes: list[float], window: int) -> float | None:
+        if len(closes) < window:
+            return None
+        sample = closes[-window:]
+        return sum(sample) / len(sample)
+
+    def _trend_label(self, price: float, sma50: float | None, sma200: float | None) -> str:
+        if sma50 is None or sma200 is None:
+            return "mixed"
+        if price > sma50 > sma200:
+            return "uptrend"
+        if price < sma50 < sma200:
+            return "downtrend"
+        return "mixed"
+
+    def _momentum_label(self, price: float, sma20: float | None, closes: list[float]) -> str:
+        if sma20 is None or len(closes) < 21:
+            return "neutral"
+        prior_price = closes[-21]
+        if price > sma20 and price > prior_price:
+            return "positive"
+        if price < sma20 and price < prior_price:
+            return "negative"
+        return "neutral"
+
+    def _entry_quality(self, price: float, sma20: float | None, sma50: float | None) -> str:
+        if sma20 is None or sma50 is None:
+            return "unknown"
+        distance_from_sma20 = abs(price - sma20) / sma20 if sma20 else 0
+        if price >= sma20 >= sma50 and distance_from_sma20 <= 0.05:
+            return "constructive"
+        if price > sma20 and distance_from_sma20 > 0.08:
+            return "extended"
+        return "neutral"
+
+    def _risk_note(self, entry_quality: str, support_levels: list[float]) -> str:
+        if entry_quality == "extended":
+            return "Price is extended above short-term support; avoid chasing strength."
+        if support_levels:
+            return f"Monitor support near {round(support_levels[0], 2)} for pullback risk."
+        return "Use recent support levels to manage entry risk."
 
 
 @dataclass(slots=True)

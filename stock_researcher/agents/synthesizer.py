@@ -18,6 +18,7 @@ class SynthesizerAgent:
         decision = prior_outputs["decision_portfolio_fit"]
         business = prior_outputs.get("business_quality")
         financial = prior_outputs.get("financial_quality")
+        technical = prior_outputs.get("technical_analysis")
         valuation = prior_outputs.get("valuation")
         news = prior_outputs.get("news_catalyst")
         risk = prior_outputs.get("risk")
@@ -27,6 +28,7 @@ class SynthesizerAgent:
             "business_quality": business.summary if business is not None else "Unavailable.",
             "financial_quality": financial.summary if financial is not None else "Unavailable.",
             "valuation": valuation.summary if valuation is not None else "Unavailable.",
+            "technical": technical.summary if technical is not None else "Unavailable.",
             "catalysts": news.summary if news is not None else "Unavailable.",
             "risks": risk.summary if risk is not None else "Unavailable.",
             "monitoring": ", ".join(risk.payload.get("monitoring_indicators", [])) if risk is not None else "",

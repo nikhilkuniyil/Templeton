@@ -135,7 +135,18 @@ def test_sec_companyfacts_market_data_client_derives_financial_metadata() -> Non
             }
         return {
             "chart": {
-                "result": [{"meta": {"regularMarketPrice": 120.0}}],
+                "result": [
+                    {
+                        "meta": {"regularMarketPrice": 120.0},
+                        "indicators": {
+                            "quote": [
+                                    {
+                                        "close": [80.0] * 150 + [100.0] * 40 + [120.0] * 15
+                                    }
+                                ]
+                            },
+                        }
+                ],
             }
         }
 
@@ -148,6 +159,9 @@ def test_sec_companyfacts_market_data_client_derives_financial_metadata() -> Non
     assert metadata["cash_flow_profile"]["free_cash_flow_quality"] == "strong"
     assert metadata["balance_sheet_profile"]["debt_risk"] == "low"
     assert metadata["current_valuation"]["pe"] == 40.0
+    assert metadata["technical_analysis"]["trend"] == "uptrend"
+    assert metadata["technical_analysis"]["momentum"] == "positive"
+    assert metadata["technical_analysis"]["entry_quality"] in {"constructive", "neutral", "extended"}
 
 
 def test_yahoo_finance_news_client_parses_rss_items() -> None:

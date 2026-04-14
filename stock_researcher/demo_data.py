@@ -103,7 +103,14 @@ def demo_connector_bundle() -> ConnectorBundle:
                         "base": {"fair_value": 910, "upside_downside_percent": -4},
                         "bull": {"fair_value": 1080, "upside_downside_percent": 14}
                     },
-                    "market_implied_expectations": ["Sustained high-margin growth"]
+                    "market_implied_expectations": ["Sustained high-margin growth"],
+                    "technical_analysis": {
+                        "trend": "uptrend",
+                        "momentum": "positive",
+                        "key_levels": {"support": [860, 825], "resistance": [950, 980]},
+                        "entry_quality": "neutral",
+                        "risk_management_note": "Prefer adding on pullbacks toward support rather than chasing strength."
+                    }
                 })],
                 "NVDA": [_doc("NVDA price history", "market_data", "NVDA", metadata={
                     "valuation_methods": ["historical_multiples", "scenario_analysis"],
@@ -113,7 +120,14 @@ def demo_connector_bundle() -> ConnectorBundle:
                         "base": {"fair_value": 1120, "upside_downside_percent": -6},
                         "bull": {"fair_value": 1310, "upside_downside_percent": 10}
                     },
-                    "market_implied_expectations": ["Very high sustained AI infrastructure demand"]
+                    "market_implied_expectations": ["Very high sustained AI infrastructure demand"],
+                    "technical_analysis": {
+                        "trend": "uptrend",
+                        "momentum": "positive",
+                        "key_levels": {"support": [1100, 1040], "resistance": [1240, 1300]},
+                        "entry_quality": "extended",
+                        "risk_management_note": "Price is extended above short-term support; avoid chasing strength."
+                    }
                 })],
             }
         ),

@@ -231,6 +231,18 @@ def _payload_for(agent_name: str, ticker: str) -> dict[str, object]:
             "evidence_ids": ["ev_040"],
             "open_questions": [],
         }
+    if agent_name == "technical_analysis":
+        return {
+            "agent_name": agent_name,
+            **shared,
+            "trend": "uptrend",
+            "momentum": "positive",
+            "key_levels": {"support": [850], "resistance": [950]},
+            "entry_quality": "neutral",
+            "risk_management_note": "Watch support on pullbacks.",
+            "evidence_ids": ["ev_035"],
+            "open_questions": [],
+        }
     if agent_name == "risk":
         return {
             "agent_name": agent_name,

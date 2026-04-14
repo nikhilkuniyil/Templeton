@@ -9,6 +9,7 @@ def test_cli_investigate_demo_outputs_agent_sections(capsys) -> None:
     assert "Investigation: ASML" in captured.out
     assert "[source_verification]" in captured.out
     assert "[business_quality]" in captured.out
+    assert "[technical_analysis]" in captured.out
     assert "[decision_portfolio_fit]" in captured.out
     assert "WATCH" in captured.out
 
