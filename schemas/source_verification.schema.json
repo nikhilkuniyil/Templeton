@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SourceVerificationOutput",
+  "type": "object",
+  "required": [
+    "agent_name",
+    "summary",
+    "tickers",
+    "sources_used",
+    "evidence_ids",
+    "freshness_status",
+    "missing_data",
+    "conflicts_found",
+    "confidence"
+  ],
+  "properties": {
+    "agent_name": { "const": "source_verification" },
+    "summary": { "type": "string" },
+    "tickers": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "sources_used": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["source_name", "source_type", "published_at", "retrieved_at"],
+        "properties": {
+          "source_name": { "type": "string" },
+          "source_type": { "type": "string" },
+          "published_at": { "type": "string" },
+          "retrieved_at": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "evidence_ids": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "freshness_status": { "type": "string", "enum": ["fresh", "mixed", "stale"] },
+    "missing_data": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "conflicts_found": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "confidence": { "type": "string", "enum": ["low", "medium", "high"] }
+  },
+  "additionalProperties": false
+}

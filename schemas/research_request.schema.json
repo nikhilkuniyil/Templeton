@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ResearchRequest",
+  "type": "object",
+  "required": ["request_id", "user_query", "mode", "tickers", "requested_at"],
+  "properties": {
+    "request_id": { "type": "string" },
+    "user_query": { "type": "string" },
+    "mode": {
+      "type": "string",
+      "enum": ["discovery", "investigation", "comparison", "conversation"]
+    },
+    "tickers": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "time_horizon": { "type": ["string", "null"] },
+    "objective": { "type": ["string", "null"] },
+    "risk_tolerance": { "type": ["string", "null"] },
+    "portfolio_context_available": { "type": "boolean" },
+    "requested_at": { "type": "string" }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ConversationalInterfaceOutput",
+  "type": "object",
+  "required": [
+    "agent_name",
+    "summary",
+    "response_type",
+    "answer",
+    "used_existing_research",
+    "needs_fresh_data",
+    "recommended_next_action",
+    "evidence_ids",
+    "confidence"
+  ],
+  "properties": {
+    "agent_name": { "const": "conversational_interface" },
+    "summary": { "type": "string" },
+    "response_type": {
+      "type": "string",
+      "enum": ["direct_answer", "clarifying_question", "workflow_handoff"]
+    },
+    "answer": { "type": "string" },
+    "used_existing_research": { "type": "boolean" },
+    "needs_fresh_data": { "type": "boolean" },
+    "recommended_next_action": { "type": ["string", "null"] },
+    "evidence_ids": { "type": "array", "items": { "type": "string" } },
+    "confidence": { "type": "string", "enum": ["low", "medium", "high"] }
+  },
+  "additionalProperties": false
+}

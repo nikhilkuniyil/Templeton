@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ScreenerUniverseOutput",
+  "type": "object",
+  "required": ["agent_name", "summary", "screen_definition", "candidates", "confidence"],
+  "properties": {
+    "agent_name": { "const": "screener_universe" },
+    "summary": { "type": "string" },
+    "screen_definition": { "type": "object" },
+    "candidates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["ticker", "score", "reasons", "risks"],
+        "properties": {
+          "ticker": { "type": "string" },
+          "score": { "type": "number" },
+          "reasons": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "risks": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "confidence": { "type": "string", "enum": ["low", "medium", "high"] }
+  },
+  "additionalProperties": false
+}

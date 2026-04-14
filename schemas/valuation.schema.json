@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ValuationOutput",
+  "type": "object",
+  "required": [
+    "agent_name",
+    "ticker",
+    "summary",
+    "methods_used",
+    "current_valuation",
+    "scenario_ranges",
+    "market_implied_expectations",
+    "valuation_label",
+    "evidence_ids",
+    "confidence",
+    "open_questions"
+  ],
+  "properties": {
+    "agent_name": { "const": "valuation" },
+    "ticker": { "type": "string" },
+    "summary": { "type": "string" },
+    "methods_used": { "type": "array", "items": { "type": "string" } },
+    "current_valuation": { "type": "object" },
+    "scenario_ranges": { "type": "object" },
+    "market_implied_expectations": { "type": "array", "items": { "type": "string" } },
+    "valuation_label": { "type": "string" },
+    "evidence_ids": { "type": "array", "items": { "type": "string" } },
+    "confidence": { "type": "string", "enum": ["low", "medium", "high"] },
+    "open_questions": { "type": "array", "items": { "type": "string" } }
+  },
+  "additionalProperties": false
+}

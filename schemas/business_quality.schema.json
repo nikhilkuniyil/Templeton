@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BusinessQualityOutput",
+  "type": "object",
+  "required": [
+    "agent_name",
+    "ticker",
+    "summary",
+    "business_model",
+    "revenue_drivers",
+    "competitive_advantages",
+    "vulnerabilities",
+    "durability_rating",
+    "evidence_ids",
+    "confidence",
+    "open_questions"
+  ],
+  "properties": {
+    "agent_name": { "const": "business_quality" },
+    "ticker": { "type": "string" },
+    "summary": { "type": "string" },
+    "business_model": { "type": "string" },
+    "revenue_drivers": { "type": "array", "items": { "type": "string" } },
+    "competitive_advantages": { "type": "array", "items": { "type": "string" } },
+    "vulnerabilities": { "type": "array", "items": { "type": "string" } },
+    "durability_rating": { "type": "string", "enum": ["low", "medium", "high"] },
+    "evidence_ids": { "type": "array", "items": { "type": "string" } },
+    "confidence": { "type": "string", "enum": ["low", "medium", "high"] },
+    "open_questions": { "type": "array", "items": { "type": "string" } }
+  },
+  "additionalProperties": false
+}

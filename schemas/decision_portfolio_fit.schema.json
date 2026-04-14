@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DecisionPortfolioFitOutput",
+  "type": "object",
+  "required": [
+    "agent_name",
+    "ticker",
+    "summary",
+    "decision",
+    "confidence",
+    "best_fit",
+    "portfolio_flags",
+    "key_reasons",
+    "invalidation_triggers",
+    "evidence_ids",
+    "open_questions"
+  ],
+  "properties": {
+    "agent_name": { "const": "decision_portfolio_fit" },
+    "ticker": { "type": "string" },
+    "summary": { "type": "string" },
+    "decision": { "type": "string", "enum": ["buy", "watch", "pass"] },
+    "confidence": { "type": "string", "enum": ["low", "medium", "high"] },
+    "best_fit": { "type": "string" },
+    "portfolio_flags": { "type": "array", "items": { "type": "string" } },
+    "key_reasons": { "type": "array", "items": { "type": "string" } },
+    "invalidation_triggers": { "type": "array", "items": { "type": "string" } },
+    "evidence_ids": { "type": "array", "items": { "type": "string" } },
+    "open_questions": { "type": "array", "items": { "type": "string" } }
+  },
+  "additionalProperties": false
+}

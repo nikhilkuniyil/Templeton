@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "FinancialQualityOutput",
+  "type": "object",
+  "required": [
+    "agent_name",
+    "ticker",
+    "summary",
+    "growth_profile",
+    "margin_profile",
+    "cash_flow_profile",
+    "balance_sheet_profile",
+    "capital_allocation",
+    "overall_quality_rating",
+    "evidence_ids",
+    "confidence",
+    "open_questions"
+  ],
+  "properties": {
+    "agent_name": { "const": "financial_quality" },
+    "ticker": { "type": "string" },
+    "summary": { "type": "string" },
+    "growth_profile": { "type": "object" },
+    "margin_profile": { "type": "object" },
+    "cash_flow_profile": { "type": "object" },
+    "balance_sheet_profile": { "type": "object" },
+    "capital_allocation": { "type": "object" },
+    "overall_quality_rating": { "type": "string", "enum": ["low", "medium", "high"] },
+    "evidence_ids": { "type": "array", "items": { "type": "string" } },
+    "confidence": { "type": "string", "enum": ["low", "medium", "high"] },
+    "open_questions": { "type": "array", "items": { "type": "string" } }
+  },
+  "additionalProperties": false
+}

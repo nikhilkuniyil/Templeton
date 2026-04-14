@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TechnicalAnalysisOutput",
+  "type": "object",
+  "required": [
+    "agent_name",
+    "ticker",
+    "summary",
+    "trend",
+    "momentum",
+    "key_levels",
+    "entry_quality",
+    "risk_management_note",
+    "evidence_ids",
+    "confidence",
+    "open_questions"
+  ],
+  "properties": {
+    "agent_name": { "const": "technical_analysis" },
+    "ticker": { "type": "string" },
+    "summary": { "type": "string" },
+    "trend": { "type": "string" },
+    "momentum": { "type": "string" },
+    "key_levels": { "type": "object" },
+    "entry_quality": { "type": "string" },
+    "risk_management_note": { "type": "string" },
+    "evidence_ids": { "type": "array", "items": { "type": "string" } },
+    "confidence": { "type": "string", "enum": ["low", "medium", "high"] },
+    "open_questions": { "type": "array", "items": { "type": "string" } }
+  },
+  "additionalProperties": false
+}

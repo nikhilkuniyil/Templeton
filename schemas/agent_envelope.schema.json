@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AgentEnvelope",
+  "type": "object",
+  "required": ["agent_name", "summary", "confidence", "generated_at"],
+  "properties": {
+    "agent_name": { "type": "string" },
+    "summary": { "type": "string" },
+    "confidence": { "type": "string", "enum": ["low", "medium", "high"] },
+    "generated_at": { "type": "string" },
+    "ticker": { "type": ["string", "null"] },
+    "analysis_mode": {
+      "type": ["string", "null"],
+      "enum": ["discovery", "investigation", "comparison", "conversation", null]
+    },
+    "key_points": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "evidence_ids": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "open_questions": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "sources_used": {
+      "type": "array",
+      "items": { "type": "object" }
+    },
+    "payload": { "type": "object" }
+  },
+  "additionalProperties": false
+}

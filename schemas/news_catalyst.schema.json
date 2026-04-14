@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "NewsCatalystOutput",
+  "type": "object",
+  "required": [
+    "agent_name",
+    "ticker",
+    "summary",
+    "positive_catalysts",
+    "negative_catalysts",
+    "recent_events",
+    "evidence_ids",
+    "confidence",
+    "open_questions"
+  ],
+  "properties": {
+    "agent_name": { "const": "news_catalyst" },
+    "ticker": { "type": "string" },
+    "summary": { "type": "string" },
+    "positive_catalysts": { "type": "array", "items": { "type": "string" } },
+    "negative_catalysts": { "type": "array", "items": { "type": "string" } },
+    "recent_events": { "type": "array", "items": { "type": "object" } },
+    "evidence_ids": { "type": "array", "items": { "type": "string" } },
+    "confidence": { "type": "string", "enum": ["low", "medium", "high"] },
+    "open_questions": { "type": "array", "items": { "type": "string" } }
+  },
+  "additionalProperties": false
+}

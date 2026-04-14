@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SynthesizerOutput",
+  "type": "object",
+  "required": [
+    "agent_name",
+    "ticker",
+    "summary",
+    "decision",
+    "confidence",
+    "memo_sections",
+    "evidence_ids",
+    "open_questions"
+  ],
+  "properties": {
+    "agent_name": { "const": "synthesizer" },
+    "ticker": { "type": "string" },
+    "summary": { "type": "string" },
+    "decision": { "type": "string", "enum": ["buy", "watch", "pass"] },
+    "confidence": { "type": "string", "enum": ["low", "medium", "high"] },
+    "memo_sections": { "type": "object" },
+    "evidence_ids": { "type": "array", "items": { "type": "string" } },
+    "open_questions": { "type": "array", "items": { "type": "string" } }
+  },
+  "additionalProperties": false
+}

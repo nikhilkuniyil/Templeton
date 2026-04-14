@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RouterPlannerOutput",
+  "type": "object",
+  "required": [
+    "agent_name",
+    "summary",
+    "mode",
+    "tickers",
+    "tasks",
+    "needs_fresh_data",
+    "confidence"
+  ],
+  "properties": {
+    "agent_name": { "const": "router_planner" },
+    "summary": { "type": "string" },
+    "mode": {
+      "type": "string",
+      "enum": ["discovery", "investigation", "comparison", "conversation"]
+    },
+    "tickers": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "time_horizon": { "type": ["string", "null"] },
+    "objective": { "type": ["string", "null"] },
+    "tasks": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "needs_fresh_data": { "type": "boolean" },
+    "clarifying_question": { "type": ["string", "null"] },
+    "confidence": { "type": "string", "enum": ["low", "medium", "high"] }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DecisionPayload",
+  "type": "object",
+  "required": ["ticker", "decision", "confidence", "thesis", "generated_at"],
+  "properties": {
+    "ticker": { "type": "string" },
+    "decision": { "type": "string", "enum": ["buy", "watch", "pass"] },
+    "confidence": { "type": "string", "enum": ["low", "medium", "high"] },
+    "thesis": { "type": "string" },
+    "generated_at": { "type": "string" },
+    "time_horizon": { "type": ["string", "null"] },
+    "best_fit": { "type": ["string", "null"] },
+    "key_reasons_for_decision": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "invalidation_triggers": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "follow_up_actions": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "additionalProperties": false
+}
