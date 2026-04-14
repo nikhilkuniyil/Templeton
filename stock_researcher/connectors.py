@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import json
 import gzip
 import re
@@ -278,8 +279,8 @@ class SecFilingsClient(SecTickerResolver):
         text = re.sub(r"(?i)<br\s*/?>", "\n", text)
         text = re.sub(r"(?i)</p>", "\n", text)
         text = re.sub(r"<[^>]+>", " ", text)
+        text = html.unescape(text)
         text = re.sub(r"&nbsp;|&#160;", " ", text)
-        text = re.sub(r"&amp;", "&", text)
         text = re.sub(r"\s+", " ", text)
         return text.strip()
 
@@ -323,35 +324,57 @@ class SecFilingsClient(SecTickerResolver):
 
     def _extract_business_model(self, company_name: str, section: str) -> str | None:
         company_token = company_name.lower().split()[0]
+        candidates: list[tuple[int, str]] = []
         for sentence in self._sentences(section):
             lowered = sentence.lower()
             if self._is_noisy_sentence(sentence):
                 continue
             has_business_verb = re.search(
-                r"\b(designs?|develops?|operates?|manufactures?|sells?|provides?|supplies?)\b",
+                r"\b(designs?|develops?|operates?|manufactures?|sells?|provides?|supplies?|includes?|offers?)\b",
                 lowered,
             )
             has_subject = company_token in lowered or re.search(r"\b(we|our|company)\b", lowered)
+            has_business_object = any(
+                term in lowered
+                for term in (
+                    "systems",
+                    "platform",
+                    "products",
+                    "services",
+                    "software",
+                    "equipment",
+                    "customers",
+                    "manufacturers",
+                    "applications",
+                    "solutions",
+                    "technology",
+                    "chip",
+                )
+            )
             if has_business_verb and has_subject:
                 if any(term in lowered for term in ("this document", "website", "incorporated by reference")):
                     continue
-                return sentence
-        return None
+                if not has_business_object:
+                    continue
+                score = self._business_sentence_score(sentence=sentence, company_token=company_token)
+                candidates.append((score, sentence))
+        if not candidates:
+            return None
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        return candidates[0][1]
 
     def _extract_revenue_drivers(self, section: str) -> list[str]:
-        drivers: list[str] = []
+        drivers: list[tuple[int, str]] = []
         for sentence in self._sentences(section):
             lowered = sentence.lower()
             if self._is_noisy_sentence(sentence):
                 continue
             if any(term in lowered for term in ("revenue", "sales", "customer", "segment", "product", "service", "end market")):
-                drivers.append(sentence)
-            if len(drivers) == 3:
-                break
-        return drivers
+                drivers.append((self._descriptive_sentence_score(sentence), sentence))
+        return self._top_unique_sentences(drivers, limit=3)
 
     def _extract_competitive_advantages(self, section: str) -> list[str]:
-        advantages: list[str] = []
+        advantages: list[tuple[int, str]] = []
         for sentence in self._sentences(section):
             lowered = sentence.lower()
             if self._is_noisy_sentence(sentence):
@@ -360,25 +383,18 @@ class SecFilingsClient(SecTickerResolver):
                 term in lowered
                 for term in ("lead", "leader", "technology", "platform", "ecosystem", "scale", "installed base", "proprietary", "switching")
             ):
-                advantages.append(sentence)
-            if len(advantages) == 3:
-                break
-        return advantages
+                advantages.append((self._descriptive_sentence_score(sentence), sentence))
+        return self._top_unique_sentences(advantages, limit=3)
 
     def _extract_risk_items(self, section: str) -> list[str]:
-        risks: list[str] = []
+        risks: list[tuple[int, str]] = []
         for sentence in self._sentences(section):
             lowered = sentence.lower()
-            if self._is_noisy_sentence(sentence) or "forward-looking" in lowered:
+            if self._is_noisy_sentence(sentence) or self._is_generic_risk_sentence(sentence):
                 continue
-            if any(
-                term in lowered
-                for term in ("risk", "adverse", "competition", "demand", "supply", "regulation", "cyclic", "trade", "foreign", "customer")
-            ):
-                risks.append(sentence)
-            if len(risks) == 4:
-                break
-        return risks
+            if self._has_negative_risk_cue(lowered):
+                risks.append((self._risk_sentence_score(sentence), sentence))
+        return self._top_unique_sentences(risks, limit=4)
 
     def _monitoring_indicators_from_risks(self, risks: list[str]) -> list[str]:
         indicators: list[str] = []
@@ -402,13 +418,17 @@ class SecFilingsClient(SecTickerResolver):
         cleaned = []
         for piece in pieces:
             normalized = piece.strip()
-            if 40 <= len(normalized) <= 320:
+            if 60 <= len(normalized) <= 320:
                 cleaned.append(normalized)
         return cleaned
 
     def _is_noisy_sentence(self, sentence: str) -> bool:
         lowered = sentence.lower()
         if sum(char.isdigit() for char in sentence) > 12:
+            return True
+        if sentence.count(";") >= 2:
+            return True
+        if re.match(r"^[A-Z0-9 ,./()-]{20,}$", sentence):
             return True
         noise_terms = (
             "table of contents",
@@ -423,8 +443,117 @@ class SecFilingsClient(SecTickerResolver):
             "notes to the consolidated",
             "incorporated by reference",
             "this document also includes",
+            "referred to as",
+            "part iii item",
+            "item 8.",
+            "item 10.",
+            "quantitative and qualitative disclosures",
+            "disclosure regarding foreign jurisdictions",
+            "preference shares foundation",
+            "throughput of the measured system",
+            "dynamic random-access memory",
+            "non-employees includes both",
+            "employment activities",
         )
         return any(term in lowered for term in noise_terms)
+
+    def _is_generic_risk_sentence(self, sentence: str) -> bool:
+        lowered = sentence.lower()
+        generic_terms = (
+            "forward-looking statements",
+            "these risks and uncertainties include",
+            "the section entitled",
+            "risk factors discussed",
+            "see also",
+            "item 1a",
+            "item 3d",
+        )
+        return any(term in lowered for term in generic_terms)
+
+    def _business_sentence_score(self, sentence: str, company_token: str) -> int:
+        lowered = sentence.lower()
+        score = self._descriptive_sentence_score(sentence)
+        if company_token in lowered:
+            score += 3
+        if re.search(r"\b(designs?|develops?|operates?|manufactures?|sells?|provides?|supplies?)\b", lowered):
+            score += 4
+        if any(term in lowered for term in ("customers", "systems", "platform", "products", "services", "manufacturers")):
+            score += 2
+        return score
+
+    def _risk_sentence_score(self, sentence: str) -> int:
+        lowered = sentence.lower()
+        score = self._descriptive_sentence_score(sentence)
+        if "could" in lowered or "may" in lowered:
+            score += 2
+        if any(term in lowered for term in ("demand", "competition", "regulation", "trade", "supply", "customer")):
+            score += 2
+        return score
+
+    def _has_negative_risk_cue(self, lowered: str) -> bool:
+        negative_cues = (
+            "adverse",
+            "adversely",
+            "could",
+            "may not",
+            "depend",
+            "decline",
+            "decrease",
+            "disrupt",
+            "disruption",
+            "restrict",
+            "restriction",
+            "regulation",
+            "regulatory",
+            "competition",
+            "competitive",
+            "supply",
+            "cyclic",
+            "cyclical",
+            "trade",
+            "tariff",
+            "unable",
+            "uncertain",
+            "materially affect",
+            "materially impact",
+            "expose",
+            "volatility",
+            "shortage",
+            "delay",
+        )
+        positive_false_positives = (
+            "strengthens our ecosystem",
+            "we believe will continue",
+            "growth opportunities",
+            "fuel capacity build-up",
+            "starting to fuel",
+        )
+        return any(cue in lowered for cue in negative_cues) and not any(
+            phrase in lowered for phrase in positive_false_positives
+        )
+
+    def _descriptive_sentence_score(self, sentence: str) -> int:
+        lowered = sentence.lower()
+        score = 0
+        if 90 <= len(sentence) <= 240:
+            score += 2
+        if sentence.count(",") <= 3:
+            score += 1
+        if not re.search(r"\b(item|part|note|section)\b", lowered):
+            score += 2
+        if not re.search(r"\b(defined as|referred to as|means)\b", lowered):
+            score += 2
+        return score
+
+    def _top_unique_sentences(self, scored_sentences: list[tuple[int, str]], limit: int) -> list[str]:
+        ordered = sorted(scored_sentences, key=lambda item: item[0], reverse=True)
+        results: list[str] = []
+        for _, sentence in ordered:
+            if sentence not in results:
+                results.append(sentence)
+            if len(results) == limit:
+                break
+        return results
 
 
 @dataclass(slots=True)

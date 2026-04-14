@@ -58,7 +58,17 @@ class RiskAgent:
                 for item in raw:
                     if isinstance(item, dict):
                         results.append(item)
-        return results
+        filtered = [item for item in results if self._is_actionable_risk(str(item.get("risk", "")))]
+        ranked = sorted(filtered, key=lambda item: self._risk_priority(str(item.get("risk", ""))), reverse=True)
+        deduped: list[dict] = []
+        seen: set[str] = set()
+        for item in ranked:
+            risk_text = str(item.get("risk", "")).strip()
+            if not risk_text or risk_text in seen:
+                continue
+            deduped.append(item)
+            seen.add(risk_text)
+        return deduped[:6]
 
     def _collect_strings(self, documents: Iterable[SourceDocument], field_name: str) -> list[str]:
         values: list[str] = []
@@ -87,3 +97,54 @@ class RiskAgent:
     def _evidence_ids(self, prior_outputs: dict[str, AgentEnvelope]) -> list[str]:
         source = prior_outputs.get("source_verification")
         return list(source.evidence_ids[:5]) if source is not None else []
+
+    def _is_actionable_risk(self, text: str) -> bool:
+        lowered = text.lower()
+        if not text or len(text) < 50 or len(text) > 320:
+            return False
+        generic = (
+            "forward-looking",
+            "item ",
+            "part iii",
+            "disclosure regarding",
+            "big bang moment of ai",
+            "strengthens our ecosystem",
+            "we believe will continue",
+            "growth opportunities",
+            "technology region",
+            "trademarks of the respective companies",
+            "with which they are associated",
+        )
+        if any(term in lowered for term in generic):
+            return False
+        negative_cues = (
+            "could",
+            "may",
+            "adverse",
+            "uncertain",
+            "restrict",
+            "decline",
+            "depend",
+            "regulation",
+            "trade",
+            "supply",
+            "competition",
+            "customer",
+            "demand",
+            "delay",
+            "volatility",
+            "disruption",
+            "shortage",
+        )
+        return any(term in lowered for term in negative_cues)
+
+    def _risk_priority(self, text: str) -> int:
+        lowered = text.lower()
+        score = 0
+        if any(term in lowered for term in ("could", "may", "adverse", "material")):
+            score += 3
+        if any(term in lowered for term in ("demand", "competition", "regulation", "trade", "supply", "customer")):
+            score += 2
+        if 80 <= len(text) <= 220:
+            score += 1
+        return score

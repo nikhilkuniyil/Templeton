@@ -57,6 +57,50 @@ def test_sec_filings_client_builds_recent_documents() -> None:
     assert docs[0].metadata["core_risks"]
 
 
+def test_sec_filings_client_filters_glossary_and_boilerplate_noise() -> None:
+    def fake_fetch(url: str, headers: dict[str, str]) -> dict:
+        if url.endswith("company_tickers.json"):
+            return {"0": {"ticker": "NVDA", "cik_str": 1045810}}
+        return {
+            "name": "NVIDIA CORP",
+            "filings": {
+                "recent": {
+                    "accessionNumber": ["0001045810-26-000001"],
+                    "form": ["10-K"],
+                    "filingDate": ["2026-02-01"],
+                    "primaryDocument": ["nvda-20260201x10k.htm"],
+                }
+            },
+        }
+
+    def fake_fetch_bytes(url: str, headers: dict[str, str]) -> bytes:
+        return b"""
+        <html><body>
+        <h1>Item 1. Business</h1>
+        <p>Quantitative and Qualitative Disclosures About Market Risk 44 Item 8.</p>
+        <p>Our technology stack includes the foundational NVIDIA CUDA development platform that runs on all NVIDIA GPUs, as well as domain-specific software libraries and networking systems.</p>
+        <p>This document also includes references to our website that are not incorporated by reference.</p>
+        <h1>Item 1A. Risk Factors</h1>
+        <p>Forward-looking statements do not guarantee future performance.</p>
+        <p>We depend on third-party manufacturing and supply-chain partners, and production constraints could adversely affect our ability to meet customer demand.</p>
+        </body></html>
+        """
+
+    client = SecFilingsClient(
+        user_agent="TempletonTest/0.1",
+        fetch_json=fake_fetch,
+        fetch_bytes=fake_fetch_bytes,
+    )
+
+    docs = client.get_company_filings("NVDA")
+    metadata = docs[0].metadata
+
+    assert "cuda development platform" in metadata["business_model"].lower()
+    assert "website" not in metadata["business_model"].lower()
+    assert metadata["core_risks"]
+    assert "supply-chain partners" in metadata["core_risks"][0]["risk"].lower()
+
+
 def test_sec_filings_client_wraps_http_errors() -> None:
     def fake_fetch(url: str, headers: dict[str, str]) -> dict:
         raise HTTPError(url, 404, "Not Found", hdrs=None, fp=None)
