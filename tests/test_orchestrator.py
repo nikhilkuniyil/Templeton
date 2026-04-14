@@ -5,6 +5,7 @@ from stock_researcher.connectors import (
     StaticNewsClient,
 )
 from stock_researcher.agents import AgentRuntime
+from stock_researcher.demo_data import demo_connector_bundle
 from stock_researcher.models import AgentEnvelope, ResearchRequest, SourceDocument
 from stock_researcher.orchestrator import InvestigationOrchestrator
 from stock_researcher.validation import ValidationError
@@ -118,15 +119,7 @@ def test_agent_runtime_executes_real_source_verification_agent() -> None:
         mode="investigation",
         tickers=["ASML"],
     )
-    connectors = ConnectorBundle(
-        filings=StaticFilingsClient(
-            {"ASML": [_source_doc("ASML annual report", "company_filing_or_release", "ASML")]}
-        ),
-        market_data=StaticMarketDataClient(
-            {"ASML": [_source_doc("ASML price history", "market_data", "ASML")]}
-        ),
-        news=StaticNewsClient({"ASML": [_source_doc("ASML news item", "news", "ASML")]}),
-    )
+    connectors = demo_connector_bundle()
     runtime = AgentRuntime()
 
     run = InvestigationOrchestrator(connectors=connectors).run(request, agent_executor=runtime.execute)
@@ -135,6 +128,11 @@ def test_agent_runtime_executes_real_source_verification_agent() -> None:
     assert source_output.payload["freshness_status"] == "fresh"
     assert len(source_output.payload["sources_used"]) == 3
     assert run.outputs["router_planner"].payload["mode"] == "investigation"
+    assert run.outputs["decision_portfolio_fit"].payload["decision"] == "watch"
+    assert run.outputs["synthesizer"].payload["decision"] == "watch"
+    assert "valuation leaves less room for error" in " ".join(
+        run.outputs["decision_portfolio_fit"].payload["key_reasons"]
+    ).lower()
 
 
 def _source_doc(name: str, source_type: str, ticker: str) -> SourceDocument:

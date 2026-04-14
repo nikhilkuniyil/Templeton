@@ -6,8 +6,14 @@ from typing import Any
 
 from ..models import AgentEnvelope, ResearchRequest, SourcePacket
 from .business_quality import BusinessQualityAgent
+from .decision_portfolio_fit import DecisionPortfolioFitAgent
+from .financial_quality import FinancialQualityAgent
+from .news_catalyst import NewsCatalystAgent
+from .risk import RiskAgent
 from .router_planner import RouterPlannerAgent
 from .source_verification import SourceVerificationAgent
+from .synthesizer import SynthesizerAgent
+from .valuation import ValuationAgent
 
 
 class AgentRuntime:
@@ -15,8 +21,14 @@ class AgentRuntime:
 
     def __init__(self) -> None:
         self.business_quality = BusinessQualityAgent()
+        self.decision_portfolio_fit = DecisionPortfolioFitAgent()
+        self.financial_quality = FinancialQualityAgent()
+        self.news_catalyst = NewsCatalystAgent()
+        self.risk = RiskAgent()
         self.router_planner = RouterPlannerAgent()
         self.source_verification = SourceVerificationAgent()
+        self.synthesizer = SynthesizerAgent()
+        self.valuation = ValuationAgent()
 
     def execute(
         self,
@@ -31,6 +43,42 @@ class AgentRuntime:
             return self.source_verification.run(request=request, source_packets=source_packets)
         if agent_name == "business_quality":
             return self.business_quality.run(
+                request=request,
+                source_packets=source_packets,
+                prior_outputs=prior_outputs,
+            )
+        if agent_name == "financial_quality":
+            return self.financial_quality.run(
+                request=request,
+                source_packets=source_packets,
+                prior_outputs=prior_outputs,
+            )
+        if agent_name == "valuation":
+            return self.valuation.run(
+                request=request,
+                source_packets=source_packets,
+                prior_outputs=prior_outputs,
+            )
+        if agent_name == "news_catalyst":
+            return self.news_catalyst.run(
+                request=request,
+                source_packets=source_packets,
+                prior_outputs=prior_outputs,
+            )
+        if agent_name == "risk":
+            return self.risk.run(
+                request=request,
+                source_packets=source_packets,
+                prior_outputs=prior_outputs,
+            )
+        if agent_name == "decision_portfolio_fit":
+            return self.decision_portfolio_fit.run(
+                request=request,
+                source_packets=source_packets,
+                prior_outputs=prior_outputs,
+            )
+        if agent_name == "synthesizer":
+            return self.synthesizer.run(
                 request=request,
                 source_packets=source_packets,
                 prior_outputs=prior_outputs,

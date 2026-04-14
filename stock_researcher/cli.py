@@ -7,6 +7,13 @@ import json
 from uuid import uuid4
 
 from .agents import AgentRuntime
+from .connectors import (
+    ConnectorBundle,
+    ConnectorError,
+    SecCompanyFactsMarketDataClient,
+    SecFilingsClient,
+    YahooFinanceNewsClient,
+)
 from .conversation import ConversationalInterface
 from .demo_data import demo_connector_bundle
 from .models import AgentEnvelope, ResearchRequest
@@ -24,12 +31,24 @@ def build_parser() -> argparse.ArgumentParser:
     investigate.add_argument("--objective", default="long_term_compounding", help="Research objective")
     investigate.add_argument("--json", action="store_true", help="Print raw JSON output")
     investigate.add_argument("--demo", action="store_true", help="Use built-in demo connector data")
+    investigate.add_argument("--live-filings", action="store_true", help="Use live SEC filings with empty market/news connectors")
+    investigate.add_argument(
+        "--sec-user-agent",
+        default="TempletonResearch/0.1 (contact: local@example.com)",
+        help="User-Agent header for SEC requests",
+    )
 
     chat = subparsers.add_parser("chat", help="Ask a conversational research question")
     chat.add_argument("ticker", help="Ticker symbol to discuss")
     chat.add_argument("question", help="Question to ask")
     chat.add_argument("--demo", action="store_true", help="Use built-in demo connector data")
     chat.add_argument("--refresh", action="store_true", help="Run a fresh investigation before answering")
+    chat.add_argument("--live-filings", action="store_true", help="Use live SEC filings with empty market/news connectors")
+    chat.add_argument(
+        "--sec-user-agent",
+        default="TempletonResearch/0.1 (contact: local@example.com)",
+        help="User-Agent header for SEC requests",
+    )
 
     return parser
 
@@ -48,7 +67,7 @@ def main(argv: list[str] | None = None) -> int:
 
 def _handle_investigate(args) -> int:
     runtime = AgentRuntime()
-    connectors = demo_connector_bundle() if args.demo else None
+    connectors = _connector_bundle_from_args(args)
     orchestrator = InvestigationOrchestrator(connectors=connectors)
     ticker = args.ticker.upper()
     request = ResearchRequest(
@@ -59,7 +78,11 @@ def _handle_investigate(args) -> int:
         time_horizon=args.time_horizon,
         objective=args.objective,
     )
-    run = orchestrator.run(request, agent_executor=runtime.execute)
+    try:
+        run = orchestrator.run(request, agent_executor=runtime.execute)
+    except ConnectorError as exc:
+        print(f"Connector error: {exc}")
+        return 1
 
     if args.json:
         print(json.dumps(_run_to_dict(run.outputs), indent=2))
@@ -82,7 +105,7 @@ def _handle_investigate(args) -> int:
 def _handle_chat(args) -> int:
     ticker = args.ticker.upper()
     runtime = AgentRuntime()
-    connectors = demo_connector_bundle() if args.demo else None
+    connectors = _connector_bundle_from_args(args)
     orchestrator = InvestigationOrchestrator(connectors=connectors)
     request = ResearchRequest(
         request_id=f"req_{uuid4().hex[:8]}",
@@ -100,7 +123,11 @@ def _handle_chat(args) -> int:
             time_horizon="long_term",
             objective="long_term_compounding",
         )
-        run = orchestrator.run(refresh_request, agent_executor=runtime.execute)
+        try:
+            run = orchestrator.run(refresh_request, agent_executor=runtime.execute)
+        except ConnectorError as exc:
+            print(f"Connector error: {exc}")
+            return 1
         prior_research = run.outputs
 
     interface = ConversationalInterface()
@@ -115,6 +142,18 @@ def _handle_chat(args) -> int:
 
 def _run_to_dict(outputs: dict[str, AgentEnvelope]) -> dict[str, dict]:
     return {name: envelope.to_dict() for name, envelope in outputs.items()}
+
+
+def _connector_bundle_from_args(args) -> ConnectorBundle | None:
+    if getattr(args, "demo", False):
+        return demo_connector_bundle()
+    if getattr(args, "live_filings", False):
+        return ConnectorBundle(
+            filings=SecFilingsClient(user_agent=args.sec_user_agent),
+            market_data=SecCompanyFactsMarketDataClient(user_agent=args.sec_user_agent),
+            news=YahooFinanceNewsClient(user_agent=args.sec_user_agent),
+        )
+    return None
 
 
 if __name__ == "__main__":
