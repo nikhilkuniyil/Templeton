@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from stock_researcher.connectors import (
     ConnectorBundle,
     StaticFilingsClient,
@@ -8,6 +10,7 @@ from stock_researcher.agents import AgentRuntime
 from stock_researcher.demo_data import demo_connector_bundle
 from stock_researcher.models import AgentEnvelope, ResearchRequest, SourceDocument
 from stock_researcher.orchestrator import InvestigationOrchestrator
+from stock_researcher.run_store import LocalRunStore
 from stock_researcher.validation import ValidationError
 
 
@@ -133,6 +136,34 @@ def test_agent_runtime_executes_real_source_verification_agent() -> None:
     assert "valuation leaves less room for error" in " ".join(
         run.outputs["decision_portfolio_fit"].payload["key_reasons"]
     ).lower()
+
+
+def test_orchestrator_persists_run_artifacts(tmp_path: Path) -> None:
+    request = ResearchRequest(
+        request_id="req_006",
+        user_query="Investigate ASML",
+        mode="investigation",
+        tickers=["ASML"],
+    )
+    runtime = AgentRuntime()
+    connectors = demo_connector_bundle()
+    run_store = LocalRunStore(tmp_path)
+
+    run = InvestigationOrchestrator(connectors=connectors, run_store=run_store).run(
+        request,
+        agent_executor=runtime.execute,
+    )
+
+    assert run.artifact_dir is not None
+    assert (run.artifact_dir / "request.json").exists()
+    assert (run.artifact_dir / "plan.json").exists()
+    assert (run.artifact_dir / "source_packets.json").exists()
+    assert (run.artifact_dir / "outputs.json").exists()
+    assert (run.artifact_dir / "scratchpad.jsonl").exists()
+    assert (tmp_path / "history" / "ASML.jsonl").exists()
+
+    loaded_outputs = run_store.load_latest_outputs("ASML")
+    assert loaded_outputs["decision_portfolio_fit"].payload["decision"] == "watch"
 
 
 def _source_doc(name: str, source_type: str, ticker: str) -> SourceDocument:

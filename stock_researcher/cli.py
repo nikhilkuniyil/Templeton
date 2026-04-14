@@ -18,6 +18,7 @@ from .conversation import ConversationalInterface
 from .demo_data import demo_connector_bundle
 from .models import AgentEnvelope, ResearchRequest
 from .orchestrator import InvestigationOrchestrator
+from .run_store import LocalRunStore
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -33,6 +34,11 @@ def build_parser() -> argparse.ArgumentParser:
     investigate.add_argument("--demo", action="store_true", help="Use built-in demo connector data")
     investigate.add_argument("--live-filings", action="store_true", help="Use live SEC filings with empty market/news connectors")
     investigate.add_argument(
+        "--store-dir",
+        default=".templeton",
+        help="Local directory for run artifacts and history",
+    )
+    investigate.add_argument(
         "--sec-user-agent",
         default="TempletonResearch/0.1 (contact: local@example.com)",
         help="User-Agent header for SEC requests",
@@ -44,6 +50,11 @@ def build_parser() -> argparse.ArgumentParser:
     chat.add_argument("--demo", action="store_true", help="Use built-in demo connector data")
     chat.add_argument("--refresh", action="store_true", help="Run a fresh investigation before answering")
     chat.add_argument("--live-filings", action="store_true", help="Use live SEC filings with empty market/news connectors")
+    chat.add_argument(
+        "--store-dir",
+        default=".templeton",
+        help="Local directory for run artifacts and history",
+    )
     chat.add_argument(
         "--sec-user-agent",
         default="TempletonResearch/0.1 (contact: local@example.com)",
@@ -68,7 +79,8 @@ def main(argv: list[str] | None = None) -> int:
 def _handle_investigate(args) -> int:
     runtime = AgentRuntime()
     connectors = _connector_bundle_from_args(args)
-    orchestrator = InvestigationOrchestrator(connectors=connectors)
+    run_store = LocalRunStore(args.store_dir)
+    orchestrator = InvestigationOrchestrator(connectors=connectors, run_store=run_store)
     ticker = args.ticker.upper()
     request = ResearchRequest(
         request_id=f"req_{uuid4().hex[:8]}",
@@ -90,6 +102,8 @@ def _handle_investigate(args) -> int:
 
     print(f"Investigation: {ticker}")
     print(f"Question: {request.user_query}")
+    if run.artifact_dir is not None:
+        print(f"Run artifacts: {run.artifact_dir}")
     for agent_name in run.steps:
         output = run.outputs.get(agent_name)
         if output is None:
@@ -106,14 +120,15 @@ def _handle_chat(args) -> int:
     ticker = args.ticker.upper()
     runtime = AgentRuntime()
     connectors = _connector_bundle_from_args(args)
-    orchestrator = InvestigationOrchestrator(connectors=connectors)
+    run_store = LocalRunStore(args.store_dir)
+    orchestrator = InvestigationOrchestrator(connectors=connectors, run_store=run_store)
     request = ResearchRequest(
         request_id=f"req_{uuid4().hex[:8]}",
         user_query=args.question,
         mode="conversation",
         tickers=[ticker],
     )
-    prior_research: dict[str, AgentEnvelope] = {}
+    prior_research: dict[str, AgentEnvelope] = run_store.load_latest_outputs(ticker)
     if args.refresh:
         refresh_request = ResearchRequest(
             request_id=request.request_id,
