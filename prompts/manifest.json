@@ -1,0 +1,5 @@
+{
+  "version": 1,
+  "source_of_truth": "stock_researcher/prompts.py",
+  "future_direction": "If prompt files are externalized later, use structured files in this directory instead of markdown notes."
+}

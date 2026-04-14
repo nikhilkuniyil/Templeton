@@ -1,0 +1,219 @@
+{
+  "plan_id": "templeton_permanent_solution_v1",
+  "updated_on": "2026-04-14",
+  "goal": "Build a CLI-first research operating system that matches Dexter on core agent capability and beats it on evidence quality, continuity, and investor usefulness.",
+  "principles": [
+    "Favor measurable quality improvements over feature count.",
+    "Keep integration boundaries loose so Dexter-compatible ingestion can be added without coupling codebases.",
+    "Require every final conclusion to be traceable to sources, intermediate outputs, and validation steps.",
+    "Persist research artifacts so work compounds over time.",
+    "Fail honestly when evidence is weak, stale, or contradictory."
+  ],
+  "north_star_capabilities": [
+    {
+      "id": "cli_reliability",
+      "description": "Stable daily-use terminal workflows for investigation, chat, comparison, refresh, and watchlist monitoring."
+    },
+    {
+      "id": "run_auditability",
+      "description": "Every run is stored with source packets, scratchpad logs, agent outputs, and final memo artifacts."
+    },
+    {
+      "id": "evaluation",
+      "description": "Changes are scored against benchmark tasks and extraction-specific golden cases before they are trusted."
+    },
+    {
+      "id": "section_aware_research",
+      "description": "Filings parsing is based on real section boundaries instead of loose sentence scanning."
+    },
+    {
+      "id": "decision_grade_output",
+      "description": "Final memos expose thesis, valuation, risks, catalysts, monitoring items, confidence, and invalidation triggers with evidence backing."
+    },
+    {
+      "id": "research_memory",
+      "description": "Ticker history, thesis drift, and what-changed comparisons are first-class workflows."
+    }
+  ],
+  "architecture": {
+    "execution_layer": {
+      "owner": "Templeton now, Dexter-compatible later",
+      "components": [
+        "CLI command surface",
+        "investigation orchestrator",
+        "agent runtime",
+        "connector bundle"
+      ]
+    },
+    "durability_layer": {
+      "owner": "Templeton",
+      "components": [
+        "local run store",
+        "scratchpad logger",
+        "artifact history",
+        "memo history"
+      ]
+    },
+    "quality_layer": {
+      "owner": "Templeton",
+      "components": [
+        "schema validation",
+        "benchmark harness",
+        "verifier agent",
+        "confidence downgrade rules"
+      ]
+    },
+    "differentiation_layer": {
+      "owner": "Templeton",
+      "components": [
+        "claim-level evidence links",
+        "section-aware SEC parser",
+        "thesis drift detection",
+        "portfolio and monitoring workflows"
+      ]
+    }
+  },
+  "phases": [
+    {
+      "phase_id": "phase_1",
+      "name": "Durable CLI Baseline",
+      "status": "in_progress",
+      "objective": "Make the current CLI repeatable and persistent enough to support later evaluation and history workflows.",
+      "deliverables": [
+        "persisted run artifacts",
+        "scratchpad logging",
+        "history-backed chat",
+        "graceful connector failure behavior"
+      ],
+      "completion_criteria": [
+        "Every investigate run writes plan, source packet, outputs, and scratchpad artifacts.",
+        "Chat can answer from saved history when a fresh run is not required.",
+        "Users can locate the latest run for a ticker from the CLI output."
+      ]
+    },
+    {
+      "phase_id": "phase_2",
+      "name": "Benchmark Harness",
+      "status": "pending",
+      "objective": "Measure quality before increasing system complexity.",
+      "deliverables": [
+        "benchmark dataset for end-to-end research prompts",
+        "golden extraction cases for filings parsing and risk extraction",
+        "scoring utilities for answer quality, evidence quality, and freshness handling",
+        "Templeton versus Dexter comparison runner"
+      ],
+      "completion_criteria": [
+        "A code change can be evaluated on a fixed benchmark suite.",
+        "Regression tests catch weaker business and risk extraction.",
+        "Templeton and Dexter can be compared on the same question set."
+      ]
+    },
+    {
+      "phase_id": "phase_3",
+      "name": "Section-Aware Filing Parser",
+      "status": "pending",
+      "objective": "Replace heuristic extraction with more reliable section-based parsing.",
+      "deliverables": [
+        "section boundary detector for Business, MD&A, and Risk Factors",
+        "normalized extraction pipeline built on detected sections",
+        "noise rejection for tables of contents, definitions, boilerplate, and legal text",
+        "issuer-aware handling for 10-K, 10-Q, 20-F, and 6-K cases"
+      ],
+      "completion_criteria": [
+        "Business summaries consistently come from Business or equivalent sections.",
+        "Risk outputs are thesis-relevant and materially less boilerplate-heavy.",
+        "Golden filing extraction tests improve versus the current baseline."
+      ]
+    },
+    {
+      "phase_id": "phase_4",
+      "name": "Verifier And Repair Loop",
+      "status": "pending",
+      "objective": "Prevent unsupported confidence from reaching the user.",
+      "deliverables": [
+        "verifier agent for stale data, unsupported claims, contradictions, and missing evidence",
+        "repair loop for incomplete runs",
+        "confidence downgrade logic tied to verifier outcomes"
+      ],
+      "completion_criteria": [
+        "Contradictions across agents are surfaced or resolved before synthesis.",
+        "Low-evidence runs degrade gracefully instead of overclaiming.",
+        "Verifier outcomes are stored in the scratchpad and final artifacts."
+      ]
+    },
+    {
+      "phase_id": "phase_5",
+      "name": "Decision-Grade Memos",
+      "status": "pending",
+      "objective": "Produce investor-useful outputs instead of generic summaries.",
+      "deliverables": [
+        "fixed final memo schema",
+        "claim-level evidence references in the memo",
+        "what changed since last run block",
+        "clear invalidation triggers and monitoring items"
+      ],
+      "completion_criteria": [
+        "Users can read one memo and understand the case for and against ownership.",
+        "The final decision is evidence-backed and explicitly constrained by uncertainty.",
+        "Memos are comparable across time for the same ticker."
+      ]
+    },
+    {
+      "phase_id": "phase_6",
+      "name": "Research Memory And Monitoring",
+      "status": "pending",
+      "objective": "Make research compound across time and positions.",
+      "deliverables": [
+        "ticker-level memo history",
+        "thesis drift detection",
+        "watchlist state and alerts",
+        "earnings preview and post-event diff workflows",
+        "portfolio concentration and overlap checks"
+      ],
+      "completion_criteria": [
+        "A user can inspect how the thesis changed across runs.",
+        "The system can explain why a stock moved from buy to watch or pass.",
+        "Monitoring workflows surface meaningful changes instead of rerunning everything blindly."
+      ]
+    }
+  ],
+  "integration_strategy": {
+    "approach": "loose_coupling",
+    "why": "Templeton should remain the durability, quality, and investor-judgment layer while staying able to ingest Dexter-style run outputs later.",
+    "near_term_actions": [
+      "Keep Templeton-native run artifacts structured and stable.",
+      "Design benchmark inputs and outputs to allow Templeton versus Dexter comparisons.",
+      "Avoid deep codebase fusion until differentiated value is proven."
+    ]
+  },
+  "current_priority_queue": [
+    {
+      "rank": 1,
+      "item": "Build benchmark harness and golden-case dataset."
+    },
+    {
+      "rank": 2,
+      "item": "Implement section-aware SEC parser."
+    },
+    {
+      "rank": 3,
+      "item": "Add verifier pass and confidence downgrade rules."
+    },
+    {
+      "rank": 4,
+      "item": "Upgrade memo schema with evidence references and change tracking."
+    }
+  ],
+  "success_definition": {
+    "parity": [
+      "Templeton matches Dexter on dependable CLI research workflows and basic live-data coverage."
+    ],
+    "differentiation": [
+      "Templeton exceeds Dexter on evidence traceability, filing extraction quality, memo usefulness, and thesis continuity."
+    ],
+    "proof": [
+      "Benchmark results show consistent quality gains on the same question set.",
+      "Users can inspect why a conclusion was reached and what changed over time."
+    ]
+  }
+}
