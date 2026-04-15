@@ -24,7 +24,7 @@ from .llm import LLMError, OpenAIResponsesClient
 from .llm import AnthropicMessagesClient, GeminiGenerateContentClient
 from .models import AgentEnvelope, ResearchRequest
 from .orchestrator import InvestigationOrchestrator
-from .research_manager import LLMResearchManager
+from .research_manager import LLMResearchManager, ManagerLoop
 from .run_store import LocalRunStore
 
 
@@ -46,6 +46,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="LLM provider to use when --llm is enabled",
     )
     investigate.add_argument("--llm-model", default="gpt-5.4-mini", help="LLM model to use when --llm is enabled")
+    investigate.add_argument(
+        "--agentic",
+        action="store_true",
+        help="Use the LLM manager loop: LLM plans which agents to run, executes them, then synthesizes (requires --llm)",
+    )
     investigate.add_argument("--demo", action="store_true", help="Use built-in demo connector data")
     investigate.add_argument("--live-filings", action="store_true", help="Use live SEC filings with empty market/news connectors")
     investigate.add_argument(
@@ -132,7 +137,6 @@ def _handle_investigate(args) -> int:
         return 1
     run_store = LocalRunStore(args.store_dir)
     runtime = AgentRuntime(run_store=run_store)
-    orchestrator = InvestigationOrchestrator(connectors=connectors, run_store=run_store)
     ticker = args.ticker.upper()
     request = ResearchRequest(
         request_id=f"req_{uuid4().hex[:8]}",
@@ -142,6 +146,68 @@ def _handle_investigate(args) -> int:
         time_horizon=args.time_horizon,
         objective=args.objective,
     )
+
+    # ── Agentic loop path (--agentic implies --llm) ───────────────────────────
+    if getattr(args, "agentic", False):
+        try:
+            manager = _llm_manager_from_args(args)
+        except ConnectorError as exc:
+            print(f"LLM setup error: {exc}")
+            return 1
+        loop = ManagerLoop(manager.llm_client)
+
+        # Build source packets outside the orchestrator so the loop can use them.
+        source_packets: dict = {}
+        if connectors is not None:
+            try:
+                source_packets = {
+                    t: connectors.build_source_packet(t) for t in request.tickers
+                }
+            except ConnectorError as exc:
+                print(f"Connector error: {exc}")
+                return 1
+
+        run_dir = run_store.start_run(request, list(ManagerLoop._PIPELINE_ORDER))
+        if source_packets:
+            run_store.record_source_packets(run_dir, source_packets)
+
+        try:
+            result = loop.run(
+                request,
+                agent_executor=runtime.execute,
+                source_packets=source_packets,
+                run_dir=run_dir,
+                run_store=run_store,
+            )
+        except LLMError as exc:
+            print(f"LLM error: {exc}")
+            return 1
+
+        # Persist the actual agent outputs so history / load_latest_outputs work.
+        from .models import SourcePacket as _SP
+        run_store.finish_run(
+            run_dir,
+            request=request,
+            outputs=result.outputs,
+            source_packets=source_packets or {ticker: _SP(ticker)},
+            steps=result.agents_run,
+        )
+
+        if args.json:
+            print(json.dumps({"memo": result.memo, "agents_run": result.agents_run, "plan_thought": result.plan_thought}, indent=2))
+            return 0
+
+        print(f"Investigation (agentic): {ticker}")
+        print(f"Question: {request.user_query}")
+        print(f"Run artifacts: {run_dir}")
+        print(f"\nPlanning thought: {result.plan_thought}")
+        print(f"Agents run: {', '.join(result.agents_run)}")
+        print("\n[llm memo]")
+        print(result.memo)
+        return 0
+
+    # ── Standard deterministic pipeline path ─────────────────────────────────
+    orchestrator = InvestigationOrchestrator(connectors=connectors, run_store=run_store)
     try:
         run = orchestrator.run(request, agent_executor=runtime.execute)
     except ConnectorError as exc:
@@ -168,15 +234,23 @@ def _handle_investigate(args) -> int:
         if output.key_points:
             for point in output.key_points[:3]:
                 print(f"- {point}")
+
     if args.llm:
         try:
             manager = _llm_manager_from_args(args)
-            llm_answer = manager.compose_investigation_answer(request, run.outputs)
+            llm_response = manager.compose_investigation_response(request, run.outputs)
         except (ConnectorError, LLMError) as exc:
             print(f"\n[llm]\nLLM error: {exc}")
             return 1
         print("\n[llm]")
-        print(llm_answer)
+        print(llm_response.text)
+        if run.artifact_dir is not None:
+            run_store.record_llm_memo(
+                run.artifact_dir,
+                llm_response.text,
+                model=llm_response.model,
+                provider=llm_response.provider,
+            )
     return 0
 
 
@@ -197,6 +271,7 @@ def _handle_chat(args) -> int:
         tickers=[ticker],
     )
     prior_research: dict[str, AgentEnvelope] = run_store.load_latest_outputs(ticker)
+    chat_run_dir = run_store.latest_run_dir(ticker)
     if args.refresh:
         refresh_request = ResearchRequest(
             request_id=request.request_id,
@@ -212,16 +287,25 @@ def _handle_chat(args) -> int:
             print(f"Connector error: {exc}")
             return 1
         prior_research = run.outputs
+        chat_run_dir = run.artifact_dir
 
     interface = ConversationalInterface()
     if args.llm and prior_research:
         try:
             manager = _llm_manager_from_args(args)
-            answer = manager.answer_chat(request, prior_research)
+            llm_response = manager.answer_chat_response(request, prior_research)
         except (ConnectorError, LLMError) as exc:
             print(f"LLM error: {exc}")
             return 1
-        print(answer)
+        print(llm_response.text)
+        if chat_run_dir is not None:
+            run_store.record_llm_chat(
+                chat_run_dir,
+                question=args.question,
+                answer=llm_response.text,
+                model=llm_response.model,
+                provider=llm_response.provider,
+            )
         return 0
 
     result = interface.respond(request, prior_research=prior_research)

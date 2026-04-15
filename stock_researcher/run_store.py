@@ -177,6 +177,56 @@ class LocalRunStore:
                 },
             )
 
+    def record_llm_memo(
+        self,
+        run_dir: Path,
+        text: str,
+        model: str,
+        provider: str,
+        mode: str = "investigation",
+    ) -> None:
+        """Persist an LLM-generated memo to the run directory."""
+        (run_dir / "llm_memo.md").write_text(text, encoding="utf-8")
+        self._append_jsonl(
+            run_dir / "scratchpad.jsonl",
+            {
+                "type": "llm_memo",
+                "timestamp": self._now(),
+                "mode": mode,
+                "model": model,
+                "provider": provider,
+                "text_length": len(text),
+            },
+        )
+
+    def record_llm_chat(
+        self,
+        run_dir: Path,
+        question: str,
+        answer: str,
+        model: str,
+        provider: str,
+    ) -> None:
+        """Append an LLM chat Q&A pair to the run's chat log."""
+        entry = {
+            "timestamp": self._now(),
+            "question": question,
+            "answer": answer,
+            "model": model,
+            "provider": provider,
+        }
+        self._append_jsonl(run_dir / "chat_log.jsonl", entry)
+        self._append_jsonl(
+            run_dir / "scratchpad.jsonl",
+            {
+                "type": "llm_chat",
+                "timestamp": entry["timestamp"],
+                "model": model,
+                "provider": provider,
+                "answer_length": len(answer),
+            },
+        )
+
     def _write_json(self, path: Path, payload: dict) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload, indent=2), encoding="utf-8")

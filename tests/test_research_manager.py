@@ -5,7 +5,7 @@ from stock_researcher.llm import (
     OpenAIResponsesClient,
 )
 from stock_researcher.models import AgentEnvelope, ResearchRequest
-from stock_researcher.research_manager import LLMResearchManager
+from stock_researcher.research_manager import LLMResearchManager, ManagerLoop
 
 
 class FakeLLMClient:
@@ -110,3 +110,110 @@ def test_gemini_client_extracts_candidate_text() -> None:
     response = client.generate("system", "user")
     assert response.text == "Gemini answer"
     assert response.provider == "gemini"
+
+
+def test_manager_loop_always_includes_verifier_and_returns_outputs() -> None:
+    client = FakeLLMClient()
+    loop = ManagerLoop(client)
+    request = ResearchRequest(
+        request_id="req_003",
+        user_query="Is ASML worth buying?",
+        mode="investigation",
+        tickers=["ASML"],
+    )
+
+    call_order: list[str] = []
+
+    def executor(agent_name, request, prior_outputs, source_packets):
+        call_order.append(agent_name)
+        if agent_name == "synthesizer":
+            payload = {
+                "agent_name": "synthesizer",
+                "ticker": "ASML",
+                "summary": "ASML memo complete.",
+                "decision": "watch",
+                "confidence": "medium",
+                "memo_sections": {"thesis": "Watch.", "verification": "Passed."},
+                "evidence_map": {"verification": ["ev_2"]},
+                "evidence_ids": ["ev_1", "ev_2"],
+                "open_questions": [],
+            }
+        elif agent_name == "verifier":
+            payload = {
+                "agent_name": "verifier",
+                "ticker": "ASML",
+                "summary": "ASML verification passed.",
+                "verifier_status": "pass",
+                "adjusted_confidence": "medium",
+                "stale_data": False,
+                "contradictions": [],
+                "unsupported_claims": [],
+                "missing_evidence": [],
+                "warnings": [],
+                "recommended_action": "accept",
+                "evidence_ids": ["ev_2"],
+                "open_questions": [],
+            }
+        elif agent_name == "decision_portfolio_fit":
+            payload = {
+                "agent_name": "decision_portfolio_fit",
+                "ticker": "ASML",
+                "summary": "ASML is currently rated WATCH.",
+                "decision": "watch",
+                "confidence": "medium",
+                "best_fit": "long_term_hold",
+                "portfolio_flags": [],
+                "key_reasons": ["Valuation elevated."],
+                "invalidation_triggers": [],
+                "evidence_ids": ["ev_1"],
+                "open_questions": [],
+            }
+        elif agent_name == "source_verification":
+            payload = {
+                "agent_name": "source_verification",
+                "summary": "sources collected",
+                "tickers": ["ASML"],
+                "sources_used": [],
+                "evidence_ids": ["ev_1"],
+                "freshness_status": "fresh",
+                "missing_data": [],
+                "conflicts_found": [],
+                "confidence": "medium",
+            }
+        elif agent_name == "router_planner":
+            payload = {
+                "agent_name": "router_planner",
+                "summary": "plan ready",
+                "mode": "investigation",
+                "tickers": ["ASML"],
+                "time_horizon": "long_term",
+                "objective": "long_term_compounding",
+                "tasks": ["source_verification", "decision_portfolio_fit", "verifier", "synthesizer"],
+                "needs_fresh_data": True,
+                "clarifying_question": None,
+                "confidence": "medium",
+            }
+        else:
+            payload = {
+                "agent_name": agent_name,
+                "ticker": "ASML",
+                "summary": f"{agent_name} summary",
+                "confidence": "medium",
+                "evidence_ids": [],
+                "open_questions": [],
+            }
+        return AgentEnvelope(
+            agent_name=agent_name,
+            ticker="ASML",
+            analysis_mode="investigation",
+            summary=f"{agent_name} completed",
+            confidence="medium",
+            evidence_ids=payload.get("evidence_ids", []),
+            payload=payload,
+        )
+
+    result = loop.run(request, executor, source_packets={})
+
+    assert "verifier" in result.agents_run
+    assert "verifier" in result.outputs
+    assert result.outputs["verifier"].payload["verifier_status"] == "pass"
