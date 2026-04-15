@@ -7,6 +7,8 @@ from stock_researcher.connectors import (
     StaticNewsClient,
 )
 from stock_researcher.agents import AgentRuntime
+from stock_researcher.agents.synthesizer import SynthesizerAgent
+from stock_researcher.agents.verifier import VerifierAgent
 from stock_researcher.demo_data import demo_connector_bundle
 from stock_researcher.models import AgentEnvelope, ResearchRequest, SourceDocument
 from stock_researcher.orchestrator import InvestigationOrchestrator
@@ -132,10 +134,12 @@ def test_agent_runtime_executes_real_source_verification_agent() -> None:
     assert len(source_output.payload["sources_used"]) == 3
     assert run.outputs["router_planner"].payload["mode"] == "investigation"
     assert run.outputs["decision_portfolio_fit"].payload["decision"] == "watch"
+    assert run.outputs["verifier"].payload["verifier_status"] == "pass"
     assert run.outputs["synthesizer"].payload["decision"] == "watch"
     assert "valuation leaves less room for error" in " ".join(
         run.outputs["decision_portfolio_fit"].payload["key_reasons"]
     ).lower()
+    assert "verification passed" in run.outputs["synthesizer"].payload["memo_sections"]["verification"].lower()
 
 
 def test_orchestrator_persists_run_artifacts(tmp_path: Path) -> None:
@@ -296,13 +300,78 @@ def _payload_for(agent_name: str, ticker: str) -> dict[str, object]:
             "evidence_ids": ["ev_020", "ev_030"],
             "open_questions": [],
         }
+    if agent_name == "verifier":
+        return {
+            "agent_name": agent_name,
+            "ticker": ticker,
+            "summary": f"{agent_name} summary",
+            "verifier_status": "pass",
+            "adjusted_confidence": "medium",
+            "stale_data": False,
+            "contradictions": [],
+            "unsupported_claims": [],
+            "missing_evidence": [],
+            "warnings": [],
+            "recommended_action": "accept",
+            "evidence_ids": ["ev_060"],
+            "open_questions": [],
+        }
     if agent_name == "synthesizer":
         return {
             "agent_name": agent_name,
             **shared,
             "decision": "watch",
-            "memo_sections": {"thesis": "Strong business, watch valuation."},
+            "memo_sections": {
+                "thesis": "Strong business, watch valuation.",
+                "verification": "ASML verification passed with no material support gaps.",
+            },
             "evidence_ids": ["ev_010", "ev_020", "ev_030"],
             "open_questions": [],
         }
     raise AssertionError(f"Unhandled agent {agent_name}")
+
+
+def test_verifier_downgrades_unsupported_buy() -> None:
+    request = ResearchRequest(
+        request_id="req_007",
+        user_query="Investigate NVDA",
+        mode="investigation",
+        tickers=["NVDA"],
+    )
+
+    def executor(
+        agent_name: str,
+        request: ResearchRequest,
+        prior_outputs: dict[str, AgentEnvelope],
+        source_packets: dict[str, object],
+    ) -> AgentEnvelope:
+        if agent_name == "verifier":
+            return VerifierAgent().run(request, source_packets, prior_outputs)
+        if agent_name == "synthesizer":
+            return SynthesizerAgent().run(request, source_packets, prior_outputs)
+        payload = _payload_for(agent_name, request.tickers[0])
+        if agent_name == "decision_portfolio_fit":
+            payload["decision"] = "buy"
+            payload["confidence"] = "high"
+            payload["summary"] = "NVDA is currently rated BUY based on quality, valuation, and risk balance."
+        if agent_name == "valuation":
+            payload["valuation_label"] = "expensive"
+        if agent_name == "technical_analysis":
+            payload["entry_quality"] = "extended"
+        return AgentEnvelope(
+            agent_name=agent_name,
+            ticker=request.tickers[0],
+            analysis_mode=request.mode,
+            summary=f"{agent_name} completed",
+            confidence="medium",
+            key_points=[f"Prior outputs: {len(prior_outputs)}"],
+            payload=payload,
+        )
+
+    run = InvestigationOrchestrator().run(request, agent_executor=executor)
+
+    verifier = run.outputs["verifier"]
+    assert verifier.payload["verifier_status"] == "fail"
+    assert verifier.payload["adjusted_confidence"] == "low"
+    assert verifier.payload["contradictions"]
+    assert run.outputs["synthesizer"].payload["confidence"] == "low"

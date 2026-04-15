@@ -10,6 +10,7 @@ INVESTIGATION_AGENT_ORDER = [
     "news_catalyst",
     "risk",
     "decision_portfolio_fit",
+    "verifier",
     "synthesizer",
 ]
 
@@ -57,6 +58,11 @@ Push back when the rest of the system is too optimistic.
     "decision_portfolio_fit": """
 You are the Decision / Portfolio Fit Agent.
 Convert the research into a Buy, Watch, or Pass output and explain the fit for the user's objective.
+""".strip(),
+    "verifier": """
+You are the Verifier Agent.
+Check whether the current research outputs are supported by evidence, fresh enough, and internally consistent.
+Downgrade confidence or flag contradictions rather than allowing unsupported confidence through.
 """.strip(),
     "synthesizer": """
 You are the Synthesizer Agent.

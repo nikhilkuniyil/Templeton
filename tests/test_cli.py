@@ -12,6 +12,7 @@ def test_cli_investigate_demo_outputs_agent_sections(capsys, tmp_path) -> None:
     assert "[business_quality]" in captured.out
     assert "[technical_analysis]" in captured.out
     assert "[decision_portfolio_fit]" in captured.out
+    assert "[verifier]" in captured.out
     assert "WATCH" in captured.out
 
 

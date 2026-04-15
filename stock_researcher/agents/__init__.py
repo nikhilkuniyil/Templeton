@@ -11,6 +11,7 @@ from .source_verification import SourceVerificationAgent
 from .synthesizer import SynthesizerAgent
 from .technical_analysis import TechnicalAnalysisAgent
 from .valuation import ValuationAgent
+from .verifier import VerifierAgent
 
 __all__ = [
     "AgentRuntime",
@@ -24,4 +25,5 @@ __all__ = [
     "SynthesizerAgent",
     "TechnicalAnalysisAgent",
     "ValuationAgent",
+    "VerifierAgent",
 ]

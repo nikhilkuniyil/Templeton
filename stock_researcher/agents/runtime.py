@@ -15,6 +15,7 @@ from .source_verification import SourceVerificationAgent
 from .synthesizer import SynthesizerAgent
 from .technical_analysis import TechnicalAnalysisAgent
 from .valuation import ValuationAgent
+from .verifier import VerifierAgent
 
 
 class AgentRuntime:
@@ -31,6 +32,7 @@ class AgentRuntime:
         self.synthesizer = SynthesizerAgent()
         self.technical_analysis = TechnicalAnalysisAgent()
         self.valuation = ValuationAgent()
+        self.verifier = VerifierAgent()
 
     def execute(
         self,
@@ -81,6 +83,12 @@ class AgentRuntime:
             )
         if agent_name == "decision_portfolio_fit":
             return self.decision_portfolio_fit.run(
+                request=request,
+                source_packets=source_packets,
+                prior_outputs=prior_outputs,
+            )
+        if agent_name == "verifier":
+            return self.verifier.run(
                 request=request,
                 source_packets=source_packets,
                 prior_outputs=prior_outputs,

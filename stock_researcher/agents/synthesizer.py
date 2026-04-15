@@ -22,6 +22,7 @@ class SynthesizerAgent:
         valuation = prior_outputs.get("valuation")
         news = prior_outputs.get("news_catalyst")
         risk = prior_outputs.get("risk")
+        verifier = prior_outputs.get("verifier")
 
         memo_sections = {
             "thesis": decision.summary,
@@ -32,11 +33,17 @@ class SynthesizerAgent:
             "catalysts": news.summary if news is not None else "Unavailable.",
             "risks": risk.summary if risk is not None else "Unavailable.",
             "monitoring": ", ".join(risk.payload.get("monitoring_indicators", [])) if risk is not None else "",
+            "verification": verifier.summary if verifier is not None else "No verifier output.",
         }
         evidence_ids: list[str] = []
         for envelope in prior_outputs.values():
             evidence_ids.extend(envelope.evidence_ids)
         evidence_ids = list(dict.fromkeys(evidence_ids))
+        final_confidence = (
+            verifier.payload.get("adjusted_confidence", decision.confidence)
+            if verifier is not None
+            else decision.confidence
+        )
         summary = f"{ticker} memo complete. Current stance: {decision.payload.get('decision', 'watch').upper()}."
 
         return AgentEnvelope(
@@ -44,10 +51,11 @@ class SynthesizerAgent:
             ticker=ticker,
             analysis_mode=request.mode,
             summary=summary,
-            confidence=decision.confidence,
+            confidence=final_confidence,
             key_points=[
                 memo_sections["thesis"],
                 memo_sections["valuation"],
+                memo_sections["verification"],
             ],
             evidence_ids=evidence_ids,
             open_questions=[],
@@ -56,7 +64,7 @@ class SynthesizerAgent:
                 "ticker": ticker,
                 "summary": summary,
                 "decision": decision.payload.get("decision", "watch"),
-                "confidence": decision.confidence,
+                "confidence": final_confidence,
                 "memo_sections": memo_sections,
                 "evidence_ids": evidence_ids,
                 "open_questions": [],

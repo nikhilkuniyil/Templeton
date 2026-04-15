@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "VerifierOutput",
+  "type": "object",
+  "required": [
+    "agent_name",
+    "ticker",
+    "summary",
+    "verifier_status",
+    "adjusted_confidence",
+    "stale_data",
+    "contradictions",
+    "unsupported_claims",
+    "missing_evidence",
+    "warnings",
+    "recommended_action",
+    "evidence_ids",
+    "open_questions"
+  ],
+  "properties": {
+    "agent_name": { "const": "verifier" },
+    "ticker": { "type": "string" },
+    "summary": { "type": "string" },
+    "verifier_status": { "type": "string", "enum": ["pass", "review", "fail"] },
+    "adjusted_confidence": { "type": "string", "enum": ["low", "medium", "high"] },
+    "stale_data": { "type": "boolean" },
+    "contradictions": { "type": "array", "items": { "type": "string" } },
+    "unsupported_claims": { "type": "array", "items": { "type": "string" } },
+    "missing_evidence": { "type": "array", "items": { "type": "string" } },
+    "warnings": { "type": "array", "items": { "type": "string" } },
+    "recommended_action": { "type": "string" },
+    "evidence_ids": { "type": "array", "items": { "type": "string" } },
+    "open_questions": { "type": "array", "items": { "type": "string" } }
+  },
+  "additionalProperties": false
+}
