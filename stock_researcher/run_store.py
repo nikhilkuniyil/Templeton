@@ -159,6 +159,11 @@ class LocalRunStore:
                         else None
                     ),
                     "memo_summary": synthesizer.summary if synthesizer is not None else None,
+                    "memo_confidence": (
+                        synthesizer.payload.get("confidence")
+                        if synthesizer is not None
+                        else None
+                    ),
                     "source_counts": {
                         "filings": len(source_packets.get(ticker, SourcePacket(ticker)).filings),
                         "market_data": len(source_packets.get(ticker, SourcePacket(ticker)).market_data),

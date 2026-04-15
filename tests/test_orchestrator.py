@@ -140,6 +140,7 @@ def test_agent_runtime_executes_real_source_verification_agent() -> None:
         run.outputs["decision_portfolio_fit"].payload["key_reasons"]
     ).lower()
     assert "verification passed" in run.outputs["synthesizer"].payload["memo_sections"]["verification"].lower()
+    assert run.outputs["synthesizer"].payload["evidence_map"]["valuation"]
 
 
 def test_orchestrator_persists_run_artifacts(tmp_path: Path) -> None:
@@ -323,7 +324,31 @@ def _payload_for(agent_name: str, ticker: str) -> dict[str, object]:
             "decision": "watch",
             "memo_sections": {
                 "thesis": "Strong business, watch valuation.",
+                "decision": "WATCH with MEDIUM confidence.",
+                "bull_case": "High quality.",
+                "bear_case": "Valuation elevated.",
+                "business_quality": "Strong business.",
+                "financial_quality": "Strong finances.",
+                "valuation": "Valuation elevated.",
+                "technical": "Technicals neutral.",
+                "catalysts": "Positive catalysts present.",
+                "risks": "Capex slowdown",
+                "monitoring": "Order growth",
                 "verification": "ASML verification passed with no material support gaps.",
+            },
+            "evidence_map": {
+                "thesis": ["ev_020"],
+                "decision": ["ev_020", "ev_060"],
+                "bull_case": ["ev_010", "ev_020"],
+                "bear_case": ["ev_030", "ev_050"],
+                "business_quality": ["ev_010"],
+                "financial_quality": ["ev_020"],
+                "valuation": ["ev_030"],
+                "technical": ["ev_035"],
+                "catalysts": ["ev_040"],
+                "risks": ["ev_050"],
+                "monitoring": ["ev_050"],
+                "verification": ["ev_060"]
             },
             "evidence_ids": ["ev_010", "ev_020", "ev_030"],
             "open_questions": [],
@@ -375,3 +400,4 @@ def test_verifier_downgrades_unsupported_buy() -> None:
     assert verifier.payload["adjusted_confidence"] == "low"
     assert verifier.payload["contradictions"]
     assert run.outputs["synthesizer"].payload["confidence"] == "low"
+    assert "verification" in run.outputs["synthesizer"].payload["evidence_map"]
