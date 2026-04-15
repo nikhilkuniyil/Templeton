@@ -1,0 +1,35 @@
+stateDiagram-v2
+    [*] --> Boot
+    Boot --> Idle: shell initialized
+
+    Idle --> MetaCommand: slash command
+    Idle --> IntentRouting: natural-language input
+
+    MetaCommand --> SessionReset: /clear
+    MetaCommand --> Exit: quit or exit command
+    MetaCommand --> Idle: other meta command handled
+
+    SessionReset --> Idle: session cleared
+
+    IntentRouting --> ClarifyingQuestion: ticker or intent ambiguous
+    IntentRouting --> MemoryLookup: context may answer request
+    IntentRouting --> FreshDataRetrieval: latest/current request or explicit refresh
+
+    ClarifyingQuestion --> IntentRouting: user clarifies
+
+    MemoryLookup --> ResponseRendering: saved context sufficient
+    MemoryLookup --> FreshDataRetrieval: context stale or insufficient
+
+    FreshDataRetrieval --> ResearchExecution: sources fetched
+    FreshDataRetrieval --> ErrorRecovery: connector failure
+
+    ResearchExecution --> Verification: outputs available
+    ResearchExecution --> ErrorRecovery: execution failure
+
+    Verification --> ResponseRendering: accepted or downgraded
+    Verification --> ErrorRecovery: unrecoverable verification failure
+
+    ResponseRendering --> Idle: response shown and state updated
+    ErrorRecovery --> Idle: error surfaced and session preserved
+
+    Exit --> [*]

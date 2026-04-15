@@ -1,0 +1,337 @@
+{
+  "spec_id": "templeton_terminal_experience_v1",
+  "updated_on": "2026-04-15",
+  "goal": "Define a terminal interaction model that feels like a research assistant, not a bundle of narrow commands.",
+  "design_position": {
+    "default_mode": "natural_language",
+    "philosophy": "Users should mostly type research requests in plain language. Explicit slash commands should be reserved for session and environment control.",
+    "anti_goals": [
+      "Do not add a new slash command for every research workflow.",
+      "Do not force users to remember implementation-specific verbs like investigate, refresh, or compare when natural language can express the same intent.",
+      "Do not let the shell UX drift independently from the research and memory architecture."
+    ]
+  },
+  "interaction_model": {
+    "input_classes": [
+      {
+        "class": "meta_command",
+        "definition": "A slash command that changes session state or inspects the environment rather than asking for stock research.",
+        "examples": [
+          "/model",
+          "/rules",
+          "/clear",
+          "/memory",
+          "/history",
+          "/help"
+        ]
+      },
+      {
+        "class": "research_request",
+        "definition": "Any natural-language prompt about a stock, thesis, comparison, refresh, or monitoring question.",
+        "examples": [
+          "look into ASML for a 5 year hold",
+          "what changed since last time",
+          "compare NVDA and AMD",
+          "refresh this with the latest data",
+          "what are the main risks here"
+        ]
+      }
+    ],
+    "routing_expectations": [
+      "The shell should classify input into a small set of research intents rather than relying on many explicit commands.",
+      "The active ticker should be used when the user omits one and the context is unambiguous.",
+      "When the user request is ambiguous, Templeton should ask a short follow-up instead of guessing."
+    ]
+  },
+  "minimal_meta_commands": [
+    {
+      "command": "/model",
+      "purpose": "Show or switch the current provider and model."
+    },
+    {
+      "command": "/rules",
+      "purpose": "Show Templeton's research rules, especially evidence, freshness, and honesty constraints."
+    },
+    {
+      "command": "/clear",
+      "purpose": "Clear the active conversational context while leaving durable research history intact."
+    },
+    {
+      "command": "/memory",
+      "purpose": "Show the current session state and what Templeton remembers about the active ticker or user context."
+    },
+    {
+      "command": "/history",
+      "purpose": "Show recent saved research summaries and thesis diffs."
+    },
+    {
+      "command": "/help",
+      "purpose": "Show the interaction model, shortcuts, and examples."
+    }
+  ],
+  "commands_explicitly_not_planned": [
+    "/investigate",
+    "/chat",
+    "/refresh",
+    "/compare",
+    "/whatchanged",
+    "/watchlist"
+  ],
+  "session_state": {
+    "required_fields": [
+      "active_ticker",
+      "active_model_provider",
+      "active_model_name",
+      "conversation_context",
+      "latest_run_id",
+      "latest_decision",
+      "latest_what_changed"
+    ],
+    "future_fields": [
+      "watchlist_context",
+      "portfolio_context",
+      "preferred_time_horizon",
+      "risk_tolerance"
+    ]
+  },
+  "state_machine": {
+    "states": [
+      {
+        "state": "boot",
+        "purpose": "Initialize session state, load defaults, and present the shell."
+      },
+      {
+        "state": "idle",
+        "purpose": "Wait for the next user input while maintaining active session context."
+      },
+      {
+        "state": "meta_command",
+        "purpose": "Handle slash commands that inspect or modify the session."
+      },
+      {
+        "state": "intent_routing",
+        "purpose": "Classify natural-language input into one of the supported research intents."
+      },
+      {
+        "state": "clarifying_question",
+        "purpose": "Request a short clarification when ticker resolution or user intent is ambiguous."
+      },
+      {
+        "state": "memory_lookup",
+        "purpose": "Load saved runs, thesis diffs, and session memory before deciding whether fresh data is needed."
+      },
+      {
+        "state": "fresh_data_retrieval",
+        "purpose": "Fetch live filings, structured data, prices, and news when the request requires freshness."
+      },
+      {
+        "state": "research_execution",
+        "purpose": "Run the orchestrator and agent manager loop over the selected research path."
+      },
+      {
+        "state": "verification",
+        "purpose": "Check contradictions, stale data, and evidence coverage before returning a confident answer."
+      },
+      {
+        "state": "response_rendering",
+        "purpose": "Render the answer in default, verbose, or debug terminal mode and update session memory."
+      },
+      {
+        "state": "error_recovery",
+        "purpose": "Handle connector, routing, or execution failures without losing the session."
+      },
+      {
+        "state": "session_reset",
+        "purpose": "Clear conversational context while preserving durable history."
+      },
+      {
+        "state": "exit",
+        "purpose": "Terminate the shell cleanly."
+      }
+    ],
+    "required_transitions": [
+      {
+        "from": "boot",
+        "to": "idle",
+        "condition": "shell initialized successfully"
+      },
+      {
+        "from": "idle",
+        "to": "meta_command",
+        "condition": "user input starts with slash"
+      },
+      {
+        "from": "idle",
+        "to": "intent_routing",
+        "condition": "user input is natural language"
+      },
+      {
+        "from": "meta_command",
+        "to": "session_reset",
+        "condition": "command is /clear"
+      },
+      {
+        "from": "meta_command",
+        "to": "exit",
+        "condition": "command requests shell termination"
+      },
+      {
+        "from": "meta_command",
+        "to": "idle",
+        "condition": "meta command completed without clearing or exiting"
+      },
+      {
+        "from": "session_reset",
+        "to": "idle",
+        "condition": "session context cleared"
+      },
+      {
+        "from": "intent_routing",
+        "to": "clarifying_question",
+        "condition": "ticker or intent is ambiguous"
+      },
+      {
+        "from": "intent_routing",
+        "to": "memory_lookup",
+        "condition": "request can be answered partly or fully from saved context"
+      },
+      {
+        "from": "intent_routing",
+        "to": "fresh_data_retrieval",
+        "condition": "request explicitly requires fresh data"
+      },
+      {
+        "from": "clarifying_question",
+        "to": "intent_routing",
+        "condition": "user provides clarification"
+      },
+      {
+        "from": "memory_lookup",
+        "to": "response_rendering",
+        "condition": "saved context is sufficient"
+      },
+      {
+        "from": "memory_lookup",
+        "to": "fresh_data_retrieval",
+        "condition": "saved context is stale or insufficient"
+      },
+      {
+        "from": "fresh_data_retrieval",
+        "to": "research_execution",
+        "condition": "required data sources were fetched successfully"
+      },
+      {
+        "from": "research_execution",
+        "to": "verification",
+        "condition": "research outputs are available"
+      },
+      {
+        "from": "verification",
+        "to": "response_rendering",
+        "condition": "answer is acceptable or confidence has been downgraded appropriately"
+      },
+      {
+        "from": "fresh_data_retrieval",
+        "to": "error_recovery",
+        "condition": "connector or retrieval failure occurs"
+      },
+      {
+        "from": "research_execution",
+        "to": "error_recovery",
+        "condition": "agent execution or orchestration failure occurs"
+      },
+      {
+        "from": "verification",
+        "to": "error_recovery",
+        "condition": "verifier detects unrecoverable failure"
+      },
+      {
+        "from": "error_recovery",
+        "to": "idle",
+        "condition": "failure is surfaced and session remains usable"
+      },
+      {
+        "from": "response_rendering",
+        "to": "idle",
+        "condition": "response is shown and session state updated"
+      }
+    ],
+    "invariants": [
+      "Every natural-language request must pass through intent_routing before execution.",
+      "Fresh-data requests must not be answered purely from memory.",
+      "Default mode should not expose raw agent internals unless the user requests verbose or debug output.",
+      "Session reset must not delete durable run history."
+    ]
+  },
+  "intent_router": {
+    "required_intents": [
+      "investigate_stock",
+      "explain_current_view",
+      "refresh_current_view",
+      "compare_stocks",
+      "show_history_or_memory",
+      "general_research_question"
+    ],
+    "routing_rules": [
+      "If the user asks for the latest or current view, route through fresh data retrieval.",
+      "If the user asks what changed, prefer memory/history before launching a full refresh.",
+      "If the user asks to compare two or more names, build a comparison request instead of two isolated investigations.",
+      "If the user asks a follow-up about the active ticker, reuse current session context unless freshness is required."
+    ],
+    "failure_behavior": [
+      "If ticker resolution is ambiguous, ask for the ticker explicitly.",
+      "If evidence is stale or missing, state that and offer a refresh path.",
+      "If the request exceeds current system capability, say so directly instead of fabricating behavior."
+    ]
+  },
+  "terminal_response_contract": {
+    "must_include": [
+      "clear statement of what Templeton is doing",
+      "research result or follow-up question",
+      "evidence or freshness caveat when relevant",
+      "memory-aware explanation when prior runs exist"
+    ],
+    "should_avoid": [
+      "dumping raw agent names unless the user is in an explicitly verbose or debug mode",
+      "forcing the user to inspect JSON artifacts for normal use",
+      "overly long step-by-step logs in the default mode"
+    ],
+    "future_modes": [
+      "default",
+      "verbose",
+      "debug"
+    ]
+  },
+  "implementation_sequence": [
+    {
+      "order": 1,
+      "item": "Freeze the command philosophy: meta commands only, natural language for research tasks."
+    },
+    {
+      "order": 2,
+      "item": "Implement the shell state machine around routing, memory lookup, fresh-data retrieval, execution, verification, and rendering."
+    },
+    {
+      "order": 3,
+      "item": "Refactor the shell to route natural-language input into intents using the active session state."
+    },
+    {
+      "order": 4,
+      "item": "Add the minimal meta commands and remove dependence on task-specific slash commands."
+    },
+    {
+      "order": 5,
+      "item": "Add concise default output mode and move detailed loop/agent output into verbose or debug mode."
+    },
+    {
+      "order": 6,
+      "item": "Only after the shell contract is stable, continue feature work on comparison, watchlists, and monitoring."
+    }
+  ],
+  "acceptance_criteria": [
+    "A first-time user can understand how to use the shell without memorizing research-specific commands.",
+    "A returning user can ask 'what changed?' or 'refresh this' and get the right behavior from context.",
+    "The shell exposes a strong product opinion without hiding evidence, memory, or freshness limitations.",
+    "New research workflows do not require new slash commands by default."
+  ]
+}

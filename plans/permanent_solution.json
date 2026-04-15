@@ -1,9 +1,10 @@
 {
   "plan_id": "templeton_permanent_solution_v1",
-  "updated_on": "2026-04-14",
+  "updated_on": "2026-04-15",
   "goal": "Build a CLI-first research operating system that matches Dexter on core agent capability and beats it on evidence quality, continuity, and investor usefulness.",
   "principles": [
     "Favor measurable quality improvements over feature count.",
+    "Default to natural-language interaction and keep explicit commands limited to session control.",
     "Keep integration boundaries loose so Dexter-compatible ingestion can be added without coupling codebases.",
     "Require every final conclusion to be traceable to sources, intermediate outputs, and validation steps.",
     "Persist research artifacts so work compounds over time.",
@@ -12,7 +13,11 @@
   "north_star_capabilities": [
     {
       "id": "cli_reliability",
-      "description": "Stable daily-use terminal workflows for investigation, chat, comparison, refresh, and watchlist monitoring."
+      "description": "Stable daily-use terminal workflows centered on a natural-language shell with minimal session commands."
+    },
+    {
+      "id": "terminal_product_fit",
+      "description": "A terminal interaction model where the user mostly speaks naturally and Templeton routes intent instead of depending on task-specific slash commands."
     },
     {
       "id": "run_auditability",
@@ -39,7 +44,10 @@
     "execution_layer": {
       "owner": "Templeton now, Dexter-compatible later",
       "components": [
-        "CLI command surface",
+        "terminal shell",
+        "minimal CLI command surface",
+        "session-state manager",
+        "intent router",
         "investigation orchestrator",
         "agent runtime",
         "connector bundle"
@@ -75,20 +83,39 @@
   },
   "phases": [
     {
+      "phase_id": "phase_0",
+      "name": "Terminal Product Spec",
+      "status": "in_progress",
+      "objective": "Lock the user interaction model before adding more task surface area.",
+      "deliverables": [
+        "natural-language-first terminal UX spec",
+        "session-state model for active ticker, model, memory, and history",
+        "minimal slash-command list focused on session control",
+        "intent-routing contract between shell and research engine"
+      ],
+      "completion_criteria": [
+        "Product decisions no longer require adding a new command for each research action.",
+        "The shell can distinguish meta commands from natural-language research requests.",
+        "Future CLI work is explicitly guided by a stable interaction spec."
+      ]
+    },
+    {
       "phase_id": "phase_1",
       "name": "Durable CLI Baseline",
       "status": "in_progress",
-      "objective": "Make the current CLI repeatable and persistent enough to support later evaluation and history workflows.",
+      "objective": "Make the terminal shell and CLI repeatable and persistent enough to support later evaluation and history workflows.",
       "deliverables": [
         "persisted run artifacts",
         "scratchpad logging",
         "history-backed chat",
-        "graceful connector failure behavior"
+        "graceful connector failure behavior",
+        "stable shell session state"
       ],
       "completion_criteria": [
         "Every investigate run writes plan, source packet, outputs, and scratchpad artifacts.",
         "Chat can answer from saved history when a fresh run is not required.",
-        "Users can locate the latest run for a ticker from the CLI output."
+        "Users can locate the latest run for a ticker from the CLI output.",
+        "The shell can reuse an active ticker across consecutive turns."
       ]
     },
     {
@@ -189,18 +216,26 @@
   "current_priority_queue": [
     {
       "rank": 1,
-      "item": "Build benchmark harness and golden-case dataset."
+      "item": "Finalize terminal UX spec and freeze command philosophy."
     },
     {
       "rank": 2,
-      "item": "Implement section-aware SEC parser."
+      "item": "Refactor shell around natural-language routing and minimal meta commands."
     },
     {
       "rank": 3,
-      "item": "Add verifier pass and confidence downgrade rules."
+      "item": "Build benchmark harness and golden-case dataset."
     },
     {
       "rank": 4,
+      "item": "Implement section-aware SEC parser."
+    },
+    {
+      "rank": 5,
+      "item": "Strengthen verifier and repair behavior."
+    },
+    {
+      "rank": 6,
       "item": "Upgrade memo schema with evidence references and change tracking."
     }
   ],
