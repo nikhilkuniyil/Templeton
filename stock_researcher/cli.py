@@ -143,6 +143,9 @@ def _handle_investigate(args) -> int:
             continue
         print(f"\n[{agent_name}]")
         print(output.summary)
+        if agent_name == "synthesizer":
+            _print_synthesizer_sections(output)
+            continue
         if output.key_points:
             for point in output.key_points[:3]:
                 print(f"- {point}")
@@ -194,6 +197,22 @@ def _handle_chat(args) -> int:
 
 def _run_to_dict(outputs: dict[str, AgentEnvelope]) -> dict[str, dict]:
     return {name: envelope.to_dict() for name, envelope in outputs.items()}
+
+
+def _print_synthesizer_sections(output: AgentEnvelope) -> None:
+    sections = output.payload.get("memo_sections", {})
+    if not isinstance(sections, dict):
+        return
+    for label, key in (
+        ("Decision", "decision"),
+        ("What changed", "what_changed"),
+        ("Verification", "verification"),
+        ("Bull case", "bull_case"),
+        ("Bear case", "bear_case"),
+    ):
+        value = sections.get(key)
+        if isinstance(value, str) and value.strip():
+            print(f"- {label}: {value}")
 
 
 def _handle_benchmark(args) -> int:

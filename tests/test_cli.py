@@ -14,6 +14,7 @@ def test_cli_investigate_demo_outputs_agent_sections(capsys, tmp_path) -> None:
     assert "[decision_portfolio_fit]" in captured.out
     assert "[verifier]" in captured.out
     assert "WATCH" in captured.out
+    assert "What changed:" in captured.out
 
 
 def test_cli_chat_demo_refreshes_and_answers(capsys, tmp_path) -> None:
