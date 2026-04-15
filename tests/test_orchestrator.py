@@ -141,6 +141,7 @@ def test_agent_runtime_executes_real_source_verification_agent() -> None:
     ).lower()
     assert "verification passed" in run.outputs["synthesizer"].payload["memo_sections"]["verification"].lower()
     assert run.outputs["synthesizer"].payload["evidence_map"]["valuation"]
+    assert "what_changed" in run.outputs["synthesizer"].payload["memo_sections"]
 
 
 def test_orchestrator_persists_run_artifacts(tmp_path: Path) -> None:
@@ -169,6 +170,31 @@ def test_orchestrator_persists_run_artifacts(tmp_path: Path) -> None:
 
     loaded_outputs = run_store.load_latest_outputs("ASML")
     assert loaded_outputs["decision_portfolio_fit"].payload["decision"] == "watch"
+
+
+def test_synthesizer_adds_what_changed_from_previous_run(tmp_path: Path) -> None:
+    run_store = LocalRunStore(tmp_path)
+    connectors = demo_connector_bundle()
+    runtime = AgentRuntime(run_store=run_store)
+    orchestrator = InvestigationOrchestrator(connectors=connectors, run_store=run_store)
+
+    first_request = ResearchRequest(
+        request_id="req_006a",
+        user_query="Investigate ASML",
+        mode="investigation",
+        tickers=["ASML"],
+    )
+    first_run = orchestrator.run(first_request, agent_executor=runtime.execute)
+    assert "No prior memo available" in first_run.outputs["synthesizer"].payload["memo_sections"]["what_changed"]
+
+    second_request = ResearchRequest(
+        request_id="req_006b",
+        user_query="Investigate ASML again",
+        mode="investigation",
+        tickers=["ASML"],
+    )
+    second_run = orchestrator.run(second_request, agent_executor=runtime.execute)
+    assert "No material thesis change" in second_run.outputs["synthesizer"].payload["memo_sections"]["what_changed"]
 
 
 def _source_doc(name: str, source_type: str, ticker: str) -> SourceDocument:
@@ -327,6 +353,7 @@ def _payload_for(agent_name: str, ticker: str) -> dict[str, object]:
                 "decision": "WATCH with MEDIUM confidence.",
                 "bull_case": "High quality.",
                 "bear_case": "Valuation elevated.",
+                "what_changed": "No material thesis change versus the latest saved memo.",
                 "business_quality": "Strong business.",
                 "financial_quality": "Strong finances.",
                 "valuation": "Valuation elevated.",
@@ -341,6 +368,7 @@ def _payload_for(agent_name: str, ticker: str) -> dict[str, object]:
                 "decision": ["ev_020", "ev_060"],
                 "bull_case": ["ev_010", "ev_020"],
                 "bear_case": ["ev_030", "ev_050"],
+                "what_changed": ["ev_020", "ev_030"],
                 "business_quality": ["ev_010"],
                 "financial_quality": ["ev_020"],
                 "valuation": ["ev_030"],

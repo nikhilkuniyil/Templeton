@@ -106,13 +106,13 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _handle_investigate(args) -> int:
-    runtime = AgentRuntime()
     try:
         connectors = _connector_bundle_from_args(args)
     except ConnectorError as exc:
         print(f"Connector error: {exc}")
         return 1
     run_store = LocalRunStore(args.store_dir)
+    runtime = AgentRuntime(run_store=run_store)
     orchestrator = InvestigationOrchestrator(connectors=connectors, run_store=run_store)
     ticker = args.ticker.upper()
     request = ResearchRequest(
@@ -151,13 +151,13 @@ def _handle_investigate(args) -> int:
 
 def _handle_chat(args) -> int:
     ticker = args.ticker.upper()
-    runtime = AgentRuntime()
     try:
         connectors = _connector_bundle_from_args(args)
     except ConnectorError as exc:
         print(f"Connector error: {exc}")
         return 1
     run_store = LocalRunStore(args.store_dir)
+    runtime = AgentRuntime(run_store=run_store)
     orchestrator = InvestigationOrchestrator(connectors=connectors, run_store=run_store)
     request = ResearchRequest(
         request_id=f"req_{uuid4().hex[:8]}",

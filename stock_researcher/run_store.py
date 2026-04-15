@@ -164,6 +164,11 @@ class LocalRunStore:
                         if synthesizer is not None
                         else None
                     ),
+                    "what_changed": (
+                        synthesizer.payload.get("memo_sections", {}).get("what_changed")
+                        if synthesizer is not None
+                        else None
+                    ),
                     "source_counts": {
                         "filings": len(source_packets.get(ticker, SourcePacket(ticker)).filings),
                         "market_data": len(source_packets.get(ticker, SourcePacket(ticker)).market_data),

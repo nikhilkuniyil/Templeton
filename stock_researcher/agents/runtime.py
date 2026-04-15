@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..models import AgentEnvelope, ResearchRequest, SourcePacket
+from ..run_store import LocalRunStore
 from .business_quality import BusinessQualityAgent
 from .decision_portfolio_fit import DecisionPortfolioFitAgent
 from .financial_quality import FinancialQualityAgent
@@ -21,7 +22,7 @@ from .verifier import VerifierAgent
 class AgentRuntime:
     """Dispatches implemented agents and falls back to placeholder envelopes."""
 
-    def __init__(self) -> None:
+    def __init__(self, run_store: LocalRunStore | None = None) -> None:
         self.business_quality = BusinessQualityAgent()
         self.decision_portfolio_fit = DecisionPortfolioFitAgent()
         self.financial_quality = FinancialQualityAgent()
@@ -29,7 +30,7 @@ class AgentRuntime:
         self.risk = RiskAgent()
         self.router_planner = RouterPlannerAgent()
         self.source_verification = SourceVerificationAgent()
-        self.synthesizer = SynthesizerAgent()
+        self.synthesizer = SynthesizerAgent(run_store=run_store)
         self.technical_analysis = TechnicalAnalysisAgent()
         self.valuation = ValuationAgent()
         self.verifier = VerifierAgent()
