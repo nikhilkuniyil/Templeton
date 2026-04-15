@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
-from typing import Protocol
+from dataclasses import dataclass, field
+from typing import Any, Callable, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -44,7 +44,9 @@ class OpenAIResponsesClient:
     model: str = "gpt-5.4-mini"
     reasoning_effort: str = "medium"
     base_url: str = "https://api.openai.com/v1/responses"
-    post_json = staticmethod(_default_post_json)
+    post_json: Callable[[str, dict[str, str], dict[str, Any]], dict] = field(
+        default=_default_post_json
+    )
 
     def generate(
         self,
@@ -88,3 +90,104 @@ class OpenAIResponsesClient:
                     if isinstance(text, str) and text.strip():
                         texts.append(text.strip())
         return "\n\n".join(texts).strip()
+
+
+@dataclass(slots=True)
+class AnthropicMessagesClient:
+    """Minimal Anthropic Messages API client."""
+
+    api_key: str
+    model: str = "claude-sonnet-4-20250514"
+    max_tokens: int = 1200
+    anthropic_version: str = "2023-06-01"
+    base_url: str = "https://api.anthropic.com/v1/messages"
+    post_json: Callable[[str, dict[str, str], dict[str, Any]], dict] = field(
+        default=_default_post_json
+    )
+
+    def generate(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+    ) -> LLMResponse:
+        payload = {
+            "model": self.model,
+            "max_tokens": self.max_tokens,
+            "system": system_prompt,
+            "messages": [{"role": "user", "content": user_prompt}],
+        }
+        headers = {
+            "x-api-key": self.api_key,
+            "anthropic-version": self.anthropic_version,
+            "content-type": "application/json",
+        }
+        try:
+            response = self.post_json(self.base_url, headers, payload)
+        except (HTTPError, URLError, ValueError) as exc:
+            raise LLMError(f"Anthropic Messages request failed: {exc}") from exc
+
+        texts: list[str] = []
+        for item in response.get("content", []):
+            if isinstance(item, dict) and item.get("type") == "text":
+                text = item.get("text")
+                if isinstance(text, str) and text.strip():
+                    texts.append(text.strip())
+        text = "\n\n".join(texts).strip()
+        if not text:
+            raise LLMError("Anthropic Messages request returned no text output.")
+        return LLMResponse(text=text, model=self.model, provider="anthropic")
+
+
+@dataclass(slots=True)
+class GeminiGenerateContentClient:
+    """Minimal Gemini generateContent REST client."""
+
+    api_key: str
+    model: str = "gemini-2.5-flash"
+    base_url: str = "https://generativelanguage.googleapis.com/v1beta/models"
+    post_json: Callable[[str, dict[str, str], dict[str, Any]], dict] = field(
+        default=_default_post_json
+    )
+
+    def generate(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+    ) -> LLMResponse:
+        payload = {
+            "system_instruction": {
+                "parts": [{"text": system_prompt}],
+            },
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [{"text": user_prompt}],
+                }
+            ],
+        }
+        headers = {
+            "x-goog-api-key": self.api_key,
+            "Content-Type": "application/json",
+        }
+        url = f"{self.base_url}/{self.model}:generateContent"
+        try:
+            response = self.post_json(url, headers, payload)
+        except (HTTPError, URLError, ValueError) as exc:
+            raise LLMError(f"Gemini generateContent request failed: {exc}") from exc
+
+        texts: list[str] = []
+        for candidate in response.get("candidates", []):
+            if not isinstance(candidate, dict):
+                continue
+            content = candidate.get("content", {})
+            if not isinstance(content, dict):
+                continue
+            for part in content.get("parts", []):
+                if isinstance(part, dict):
+                    text = part.get("text")
+                    if isinstance(text, str) and text.strip():
+                        texts.append(text.strip())
+        text = "\n\n".join(texts).strip()
+        if not text:
+            raise LLMError("Gemini generateContent request returned no text output.")
+        return LLMResponse(text=text, model=self.model, provider="gemini")

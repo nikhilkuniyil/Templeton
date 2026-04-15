@@ -21,6 +21,7 @@ from .conversation import ConversationalInterface
 from .benchmarks import BenchmarkHarness, format_suite_result
 from .demo_data import demo_connector_bundle
 from .llm import LLMError, OpenAIResponsesClient
+from .llm import AnthropicMessagesClient, GeminiGenerateContentClient
 from .models import AgentEnvelope, ResearchRequest
 from .orchestrator import InvestigationOrchestrator
 from .research_manager import LLMResearchManager
@@ -38,6 +39,12 @@ def build_parser() -> argparse.ArgumentParser:
     investigate.add_argument("--objective", default="long_term_compounding", help="Research objective")
     investigate.add_argument("--json", action="store_true", help="Print raw JSON output")
     investigate.add_argument("--llm", action="store_true", help="Use an LLM to produce an upgraded final memo")
+    investigate.add_argument(
+        "--llm-provider",
+        default="openai",
+        choices=["openai", "anthropic", "gemini"],
+        help="LLM provider to use when --llm is enabled",
+    )
     investigate.add_argument("--llm-model", default="gpt-5.4-mini", help="LLM model to use when --llm is enabled")
     investigate.add_argument("--demo", action="store_true", help="Use built-in demo connector data")
     investigate.add_argument("--live-filings", action="store_true", help="Use live SEC filings with empty market/news connectors")
@@ -61,6 +68,12 @@ def build_parser() -> argparse.ArgumentParser:
     chat.add_argument("ticker", help="Ticker symbol to discuss")
     chat.add_argument("question", help="Question to ask")
     chat.add_argument("--llm", action="store_true", help="Use an LLM for the final conversational answer")
+    chat.add_argument(
+        "--llm-provider",
+        default="openai",
+        choices=["openai", "anthropic", "gemini"],
+        help="LLM provider to use when --llm is enabled",
+    )
     chat.add_argument("--llm-model", default="gpt-5.4-mini", help="LLM model to use when --llm is enabled")
     chat.add_argument("--demo", action="store_true", help="Use built-in demo connector data")
     chat.add_argument("--refresh", action="store_true", help="Run a fresh investigation before answering")
@@ -279,11 +292,26 @@ def _connector_bundle_from_args(args) -> ConnectorBundle | None:
 
 
 def _llm_manager_from_args(args) -> LLMResearchManager:
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise ConnectorError("OPENAI_API_KEY is not set. Export it before using --llm.")
-    client = OpenAIResponsesClient(api_key=api_key, model=args.llm_model)
-    return LLMResearchManager(client)
+    provider = args.llm_provider
+    if provider == "openai":
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise ConnectorError("OPENAI_API_KEY is not set. Export it before using --llm with OpenAI.")
+        client = OpenAIResponsesClient(api_key=api_key, model=args.llm_model)
+        return LLMResearchManager(client)
+    if provider == "anthropic":
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+        if not api_key:
+            raise ConnectorError("ANTHROPIC_API_KEY is not set. Export it before using --llm with Anthropic.")
+        client = AnthropicMessagesClient(api_key=api_key, model=args.llm_model)
+        return LLMResearchManager(client)
+    if provider == "gemini":
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            raise ConnectorError("GEMINI_API_KEY is not set. Export it before using --llm with Gemini.")
+        client = GeminiGenerateContentClient(api_key=api_key, model=args.llm_model)
+        return LLMResearchManager(client)
+    raise ConnectorError(f"Unsupported LLM provider: {provider}")
 
 
 if __name__ == "__main__":

@@ -1,4 +1,9 @@
-from stock_researcher.llm import LLMResponse
+from stock_researcher.llm import (
+    AnthropicMessagesClient,
+    GeminiGenerateContentClient,
+    LLMResponse,
+    OpenAIResponsesClient,
+)
 from stock_researcher.models import AgentEnvelope, ResearchRequest
 from stock_researcher.research_manager import LLMResearchManager
 
@@ -65,3 +70,43 @@ def test_research_manager_builds_chat_prompt() -> None:
 
     assert answer == "LLM final answer"
     assert "Prior research context" in client.calls[0][1]
+
+
+def test_openai_client_extracts_output_text() -> None:
+    client = OpenAIResponsesClient(
+        api_key="test-key",
+        post_json=lambda url, headers, payload: {"output_text": "OpenAI answer"},
+    )
+    response = client.generate("system", "user")
+    assert response.text == "OpenAI answer"
+    assert response.provider == "openai"
+
+
+def test_anthropic_client_extracts_text_blocks() -> None:
+    client = AnthropicMessagesClient(
+        api_key="test-key",
+        post_json=lambda url, headers, payload: {
+            "content": [{"type": "text", "text": "Claude answer"}]
+        },
+    )
+    response = client.generate("system", "user")
+    assert response.text == "Claude answer"
+    assert response.provider == "anthropic"
+
+
+def test_gemini_client_extracts_candidate_text() -> None:
+    client = GeminiGenerateContentClient(
+        api_key="test-key",
+        post_json=lambda url, headers, payload: {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [{"text": "Gemini answer"}]
+                    }
+                }
+            ]
+        },
+    )
+    response = client.generate("system", "user")
+    assert response.text == "Gemini answer"
+    assert response.provider == "gemini"
