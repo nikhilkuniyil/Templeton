@@ -66,6 +66,16 @@ class LocalRunStore:
             },
         )
 
+    def record_manager_step(self, run_dir: Path, payload: dict) -> None:
+        self._append_jsonl(
+            run_dir / "scratchpad.jsonl",
+            {
+                "type": "manager_step",
+                "timestamp": self._now(),
+                **payload,
+            },
+        )
+
     def finish_run(
         self,
         run_dir: Path,
@@ -126,6 +136,19 @@ class LocalRunStore:
             return None
         entry = json.loads(lines[-1])
         return Path(entry["run_dir"])
+
+    def load_history_entries(self, ticker: str, limit: int = 5) -> list[dict]:
+        history_path = self.base_dir / "history" / f"{ticker.upper()}.jsonl"
+        if not history_path.exists():
+            return []
+        entries = [
+            json.loads(line)
+            for line in history_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        if limit <= 0:
+            return entries
+        return entries[-limit:]
 
     def _update_history(
         self,

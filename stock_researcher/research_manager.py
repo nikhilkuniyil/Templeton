@@ -154,8 +154,16 @@ class ManagerLoop:
     _PLANNER_SYSTEM = (
         "You are Templeton's research director. "
         "Given a user query, select the minimum set of analysis agents needed to answer it well. "
-        "Always include 'decision_portfolio_fit' and 'synthesizer'. "
+        "Always include 'decision_portfolio_fit', 'verifier', and 'synthesizer'. "
         "Respond ONLY with valid JSON — no markdown fences, no prose outside the JSON object."
+    )
+
+    _MANAGER_SYSTEM = (
+        "You are Templeton's research manager. "
+        "Decide the single next best action using only the available agent list and completed results. "
+        "Prefer the minimum work needed for a reliable answer. "
+        "You may only respond with JSON. "
+        "Valid actions are run_agent or finalize."
     )
 
     _SYNTHESIS_SYSTEM = (
@@ -167,6 +175,58 @@ class ManagerLoop:
 
     def __init__(self, llm_client: LLMClient) -> None:
         self.llm_client = llm_client
+
+    def _safe_json_loads(self, text: str) -> dict[str, Any] | None:
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    def _ordered_selection(self, selected: set[str]) -> list[str]:
+        return [name for name in self._PIPELINE_ORDER if name in selected]
+
+    def _next_unrun_agent(self, selected: set[str], completed: set[str]) -> str | None:
+        for name in self._ordered_selection(selected):
+            if name not in completed:
+                return name
+        return None
+
+    def _manager_prompt(
+        self,
+        request: ResearchRequest,
+        selected_agents: set[str],
+        outputs: dict[str, AgentEnvelope],
+        loop_steps: list[dict[str, Any]],
+    ) -> str:
+        completed = sorted(outputs.keys())
+        remaining = [name for name in self._ordered_selection(selected_agents) if name not in completed]
+        compact_outputs = {
+            name: {
+                "summary": envelope.summary,
+                "confidence": envelope.confidence,
+                "key_points": envelope.key_points[:3],
+                "payload": envelope.payload,
+            }
+            for name, envelope in outputs.items()
+        }
+        return (
+            f"User query: {request.user_query}\n\n"
+            f"Selected agents: {self._ordered_selection(selected_agents)}\n"
+            f"Completed agents: {completed}\n"
+            f"Remaining agents: {remaining}\n\n"
+            f"Current research state:\n{json.dumps(compact_outputs, indent=2, sort_keys=True)}\n\n"
+            f"Prior manager steps:\n{json.dumps(loop_steps[-8:], indent=2, sort_keys=True)}\n\n"
+            "Respond with JSON in exactly this shape:\n"
+            '{'
+            '"thought":"<one sentence>",'
+            '"next_action":{"type":"run_agent","agent":"<agent_name>"}'
+            '}\n'
+            "or\n"
+            '{'
+            '"thought":"<one sentence>",'
+            '"next_action":{"type":"finalize","reason":"<why the current evidence is sufficient>"}}'
+        )
 
     def run(
         self,
@@ -191,9 +251,8 @@ class ManagerLoop:
         )
         plan_response = self.llm_client.generate(self._PLANNER_SYSTEM, plan_prompt)
 
-        try:
-            plan = json.loads(plan_response.text)
-        except json.JSONDecodeError:
+        plan = self._safe_json_loads(plan_response.text)
+        if plan is None:
             # Fall back to running all agents if LLM response is not clean JSON.
             plan = {"thought": "fallback: LLM plan parse failed", "agents": list(self.AGENT_REGISTRY)}
 
@@ -202,20 +261,28 @@ class ManagerLoop:
 
         # Always include decision, verification, and synthesis.
         requested.update({"decision_portfolio_fit", "verifier", "synthesizer"})
-
-        # ── 2. Execute ────────────────────────────────────────────────────────
-        # Infrastructure agents first, then selected analysis agents in pipeline order.
-        ordered: list[str] = ["router_planner", "source_verification"]
-        for name in self._PIPELINE_ORDER:
-            if name in requested:
-                ordered.append(name)
+        requested.discard("synthesizer")
 
         outputs: dict[str, AgentEnvelope] = dict(prior_outputs)
         loop_steps: list[dict[str, Any]] = [
-            {"step": "plan", "thought": plan_thought, "agents_selected": list(requested)}
+            {
+                "step": "plan",
+                "thought": plan_thought,
+                "agents_selected": self._ordered_selection(requested),
+            }
         ]
+        if run_store is not None and run_dir is not None:
+            run_store.record_manager_step(
+                run_dir,
+                {
+                    "phase": "plan",
+                    "thought": plan_thought,
+                    "agents_selected": self._ordered_selection(requested),
+                },
+            )
 
-        for agent_name in ordered:
+        # ── 2. Execute infrastructure agents first ───────────────────────────
+        for agent_name in ("router_planner", "source_verification"):
             try:
                 envelope = agent_executor(
                     agent_name=agent_name,
@@ -239,7 +306,178 @@ class ManagerLoop:
             if run_store is not None and run_dir is not None:
                 run_store.record_agent_output(run_dir, envelope)
 
-        # ── 3. Synthesize ─────────────────────────────────────────────────────
+        # ── 3. Iterative manager loop over selectable agents ─────────────────
+        max_iterations = max(len(requested) + 2, 4)
+        completed = set(outputs)
+        agents_run = ["router_planner", "source_verification"]
+
+        for _ in range(max_iterations):
+            prompt = self._manager_prompt(
+                request=request,
+                selected_agents=requested,
+                outputs=outputs,
+                loop_steps=loop_steps,
+            )
+            decision_response = self.llm_client.generate(self._MANAGER_SYSTEM, prompt)
+            decision = self._safe_json_loads(decision_response.text)
+            thought = ""
+            next_action: dict[str, Any] = {}
+            if decision is not None:
+                thought = str(decision.get("thought", "")).strip()
+                raw_action = decision.get("next_action", {})
+                if isinstance(raw_action, dict):
+                    next_action = raw_action
+
+            action_type = str(next_action.get("type", "")).strip()
+            if action_type == "run_agent":
+                agent_name = str(next_action.get("agent", "")).strip()
+                if agent_name not in requested or agent_name in completed:
+                    fallback_agent = self._next_unrun_agent(requested, completed)
+                    if fallback_agent is None:
+                        loop_steps.append(
+                            {
+                                "step": "manager_finalize",
+                                "thought": thought or "No remaining selected agents; finalizing.",
+                                "reason": "selected_agents_exhausted",
+                            }
+                        )
+                        if run_store is not None and run_dir is not None:
+                            run_store.record_manager_step(
+                                run_dir,
+                                {
+                                    "phase": "loop_finalize",
+                                    "thought": thought or "No remaining selected agents; finalizing.",
+                                    "reason": "selected_agents_exhausted",
+                                },
+                            )
+                        break
+                    agent_name = fallback_agent
+                    thought = thought or f"Fallback to next required agent: {agent_name}."
+
+                loop_steps.append(
+                    {
+                        "step": "manager_action",
+                        "thought": thought,
+                        "action": "run_agent",
+                        "agent": agent_name,
+                    }
+                )
+                if run_store is not None and run_dir is not None:
+                    run_store.record_manager_step(
+                        run_dir,
+                        {
+                            "phase": "loop_action",
+                            "thought": thought,
+                            "action": "run_agent",
+                            "agent": agent_name,
+                        },
+                    )
+                try:
+                    envelope = agent_executor(
+                        agent_name=agent_name,
+                        request=request,
+                        prior_outputs=outputs,
+                        source_packets=source_packets,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    loop_steps.append({"step": "agent_error", "agent": agent_name, "error": str(exc)})
+                    completed.add(agent_name)
+                    continue
+
+                outputs[agent_name] = envelope
+                completed.add(agent_name)
+                agents_run.append(agent_name)
+                loop_steps.append(
+                    {
+                        "step": "agent_output",
+                        "agent": agent_name,
+                        "summary": envelope.summary,
+                        "confidence": envelope.confidence,
+                    }
+                )
+                if run_store is not None and run_dir is not None:
+                    run_store.record_agent_output(run_dir, envelope)
+                continue
+
+            reason = str(next_action.get("reason", "")).strip()
+            loop_steps.append(
+                {
+                    "step": "manager_finalize",
+                    "thought": thought or "Manager decided current evidence is sufficient.",
+                    "reason": reason or "llm_finalize",
+                }
+            )
+            if run_store is not None and run_dir is not None:
+                run_store.record_manager_step(
+                    run_dir,
+                    {
+                        "phase": "loop_finalize",
+                        "thought": thought or "Manager decided current evidence is sufficient.",
+                        "reason": reason or "llm_finalize",
+                    },
+                )
+            break
+        else:
+            loop_steps.append(
+                {
+                    "step": "manager_finalize",
+                    "thought": "Iteration limit reached; finalizing with current evidence.",
+                    "reason": "iteration_limit",
+                }
+            )
+            if run_store is not None and run_dir is not None:
+                run_store.record_manager_step(
+                    run_dir,
+                    {
+                        "phase": "loop_finalize",
+                        "thought": "Iteration limit reached; finalizing with current evidence.",
+                        "reason": "iteration_limit",
+                    },
+                )
+
+        # Enforce final decision integrity before synthesis.
+        for required_agent in ("decision_portfolio_fit", "verifier"):
+            if required_agent not in outputs:
+                envelope = agent_executor(
+                    agent_name=required_agent,
+                    request=request,
+                    prior_outputs=outputs,
+                    source_packets=source_packets,
+                )
+                outputs[required_agent] = envelope
+                agents_run.append(required_agent)
+                loop_steps.append(
+                    {
+                        "step": "agent_output",
+                        "agent": required_agent,
+                        "summary": envelope.summary,
+                        "confidence": envelope.confidence,
+                        "forced": True,
+                    }
+                )
+                if run_store is not None and run_dir is not None:
+                    run_store.record_agent_output(run_dir, envelope)
+
+        # ── 4. Deterministic synthesizer, then LLM narrative ─────────────────
+        synthesizer_envelope = agent_executor(
+            agent_name="synthesizer",
+            request=request,
+            prior_outputs=outputs,
+            source_packets=source_packets,
+        )
+        outputs["synthesizer"] = synthesizer_envelope
+        agents_run.append("synthesizer")
+        loop_steps.append(
+            {
+                "step": "agent_output",
+                "agent": "synthesizer",
+                "summary": synthesizer_envelope.summary,
+                "confidence": synthesizer_envelope.confidence,
+            }
+        )
+        if run_store is not None and run_dir is not None:
+            run_store.record_agent_output(run_dir, synthesizer_envelope)
+
         synthesis_prompt = (
             f"User question: {request.user_query}\n\n"
             "Structured research context (from selected agents):\n"
@@ -266,7 +504,7 @@ class ManagerLoop:
 
         return LoopResult(
             memo=memo,
-            agents_run=ordered,
+            agents_run=agents_run,
             plan_thought=plan_thought,
             model=synthesis_response.model,
             provider=synthesis_response.provider,

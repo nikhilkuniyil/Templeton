@@ -46,3 +46,26 @@ def test_cli_benchmark_outputs_summary(capsys, tmp_path) -> None:
     assert "Benchmark suite:" in captured.out
     assert "Cases passed:" in captured.out
     assert "asml_long_term_demo [PASS]" in captured.out
+
+
+def test_cli_shell_supports_investigate_chat_and_history(monkeypatch, capsys, tmp_path) -> None:
+    commands = iter(
+        [
+            "/use ASML",
+            "/investigate",
+            "Why was this rated watch?",
+            "/history",
+            "/quit",
+        ]
+    )
+    monkeypatch.setattr("builtins.input", lambda _: next(commands))
+
+    exit_code = main(["shell", "--demo", "--store-dir", str(tmp_path)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Templeton shell" in captured.out
+    assert "Active ticker: ASML" in captured.out
+    assert "Investigation: ASML" in captured.out or "Investigation (agentic): ASML" in captured.out
+    assert "Prior research leans WATCH" in captured.out
+    assert "History: ASML" in captured.out

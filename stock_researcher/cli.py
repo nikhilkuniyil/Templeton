@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 from uuid import uuid4
 
 from .agents import AgentRuntime
@@ -112,6 +113,38 @@ def build_parser() -> argparse.ArgumentParser:
     )
     benchmark.add_argument("--json", action="store_true", help="Print raw JSON output")
 
+    shell = subparsers.add_parser("shell", help="Launch an interactive Templeton terminal")
+    shell.add_argument("--llm", action="store_true", help="Use an LLM for upgraded memos and chat")
+    shell.add_argument(
+        "--llm-provider",
+        default="openai",
+        choices=["openai", "anthropic", "gemini"],
+        help="LLM provider to use when --llm is enabled",
+    )
+    shell.add_argument("--llm-model", default="gpt-5.4-mini", help="LLM model to use when --llm is enabled")
+    shell.add_argument(
+        "--agentic",
+        action="store_true",
+        help="Use the iterative LLM manager loop for investigations in shell mode",
+    )
+    shell.add_argument("--demo", action="store_true", help="Use built-in demo connector data")
+    shell.add_argument("--live-filings", action="store_true", help="Use live SEC filings with market/news connectors")
+    shell.add_argument(
+        "--financial-datasets",
+        action="store_true",
+        help="Use Financial Datasets as the primary structured-data backbone",
+    )
+    shell.add_argument(
+        "--store-dir",
+        default=".templeton",
+        help="Local directory for run artifacts and history",
+    )
+    shell.add_argument(
+        "--sec-user-agent",
+        default="TempletonResearch/0.1 (contact: local@example.com)",
+        help="User-Agent header for SEC requests",
+    )
+
     return parser
 
 
@@ -125,6 +158,8 @@ def main(argv: list[str] | None = None) -> int:
         return _handle_chat(args)
     if args.command == "benchmark":
         return _handle_benchmark(args)
+    if args.command == "shell":
+        return _handle_shell(args)
     parser.error(f"Unknown command: {args.command}")
     return 2
 
@@ -194,7 +229,17 @@ def _handle_investigate(args) -> int:
         )
 
         if args.json:
-            print(json.dumps({"memo": result.memo, "agents_run": result.agents_run, "plan_thought": result.plan_thought}, indent=2))
+            print(
+                json.dumps(
+                    {
+                        "memo": result.memo,
+                        "agents_run": result.agents_run,
+                        "plan_thought": result.plan_thought,
+                        "loop_steps": result.loop_steps,
+                    },
+                    indent=2,
+                )
+            )
             return 0
 
         print(f"Investigation (agentic): {ticker}")
@@ -202,6 +247,7 @@ def _handle_investigate(args) -> int:
         print(f"Run artifacts: {run_dir}")
         print(f"\nPlanning thought: {result.plan_thought}")
         print(f"Agents run: {', '.join(result.agents_run)}")
+        _print_manager_steps(result.loop_steps)
         print("\n[llm memo]")
         print(result.memo)
         return 0
@@ -321,6 +367,18 @@ def _run_to_dict(outputs: dict[str, AgentEnvelope]) -> dict[str, dict]:
     return {name: envelope.to_dict() for name, envelope in outputs.items()}
 
 
+def _print_manager_steps(loop_steps: list[dict]) -> None:
+    printable = [step for step in loop_steps if step.get("step") in {"manager_action", "manager_finalize"}]
+    if not printable:
+        return
+    print("\nManager loop:")
+    for step in printable:
+        if step["step"] == "manager_action":
+            print(f"- Run {step.get('agent')}: {step.get('thought', '')}")
+        else:
+            print(f"- Finalize: {step.get('thought', '')}")
+
+
 def _print_synthesizer_sections(output: AgentEnvelope) -> None:
     sections = output.payload.get("memo_sections", {})
     if not isinstance(sections, dict):
@@ -337,6 +395,20 @@ def _print_synthesizer_sections(output: AgentEnvelope) -> None:
             print(f"- {label}: {value}")
 
 
+def _print_history(run_store: LocalRunStore, ticker: str, limit: int = 5) -> None:
+    entries = run_store.load_history_entries(ticker, limit=limit)
+    if not entries:
+        print(f"No saved history for {ticker}.")
+        return
+    print(f"History: {ticker}")
+    for entry in entries:
+        decision = (entry.get("decision") or "unknown").upper()
+        freshness = entry.get("freshness_status") or "unknown"
+        changed = entry.get("what_changed") or "No stored thesis diff."
+        print(f"- {entry.get('saved_at')}: {decision} | freshness={freshness}")
+        print(f"  {changed}")
+
+
 def _handle_benchmark(args) -> int:
     harness = BenchmarkHarness(run_store=LocalRunStore(args.store_dir))
     result = harness.run_suite(args.suite)
@@ -345,6 +417,147 @@ def _handle_benchmark(args) -> int:
         return 0
     print(format_suite_result(result))
     return 0
+
+
+def _handle_shell(args) -> int:
+    run_store = LocalRunStore(args.store_dir)
+    active_ticker: str | None = None
+    print("Templeton shell")
+    print("Commands: /use TICKER, /investigate [TICKER] [query], /chat [TICKER] question, /refresh [TICKER], /history [TICKER] [limit], /help, /quit")
+    while True:
+        prompt = f"templeton[{active_ticker or '-'}]> "
+        try:
+            raw = input(prompt).strip()
+        except EOFError:
+            print()
+            return 0
+        except KeyboardInterrupt:
+            print()
+            return 0
+
+        if not raw:
+            continue
+        if raw in {"/quit", "/exit"}:
+            return 0
+        if raw == "/help":
+            print("Free-form text asks a chat question about the active ticker.")
+            print("/use TICKER")
+            print("/investigate [TICKER] [optional query]")
+            print("/chat [TICKER] question")
+            print("/refresh [TICKER]")
+            print("/history [TICKER] [limit]")
+            print("/quit")
+            continue
+
+        try:
+            tokens = shlex.split(raw)
+        except ValueError as exc:
+            print(f"Input error: {exc}")
+            continue
+        if not tokens:
+            continue
+
+        command = tokens[0]
+        if command == "/use":
+            if len(tokens) < 2:
+                print("Usage: /use TICKER")
+                continue
+            active_ticker = tokens[1].upper()
+            print(f"Active ticker: {active_ticker}")
+            continue
+
+        if command == "/history":
+            ticker = active_ticker
+            limit = 5
+            if len(tokens) >= 2:
+                maybe_limit = tokens[-1]
+                if maybe_limit.isdigit():
+                    limit = int(maybe_limit)
+                    if len(tokens) >= 3:
+                        ticker = tokens[1].upper()
+                else:
+                    ticker = tokens[1].upper()
+            if not ticker:
+                print("No active ticker. Use /use TICKER or pass one explicitly.")
+                continue
+            _print_history(run_store, ticker, limit=limit)
+            continue
+
+        if command == "/investigate":
+            ticker = active_ticker
+            query = None
+            if len(tokens) >= 2:
+                if tokens[1].isalnum() and len(tokens[1]) <= 10:
+                    ticker = tokens[1].upper()
+                    query = " ".join(tokens[2:]) or None
+                else:
+                    query = " ".join(tokens[1:]) or None
+            if not ticker:
+                print("No active ticker. Use /use TICKER or pass a ticker to /investigate.")
+                continue
+            active_ticker = ticker
+            investigate_args = argparse.Namespace(**vars(args))
+            investigate_args.command = "investigate"
+            investigate_args.ticker = ticker
+            investigate_args.query = query
+            investigate_args.time_horizon = "long_term"
+            investigate_args.objective = "long_term_compounding"
+            investigate_args.json = False
+            _handle_investigate(investigate_args)
+            continue
+
+        if command == "/refresh":
+            ticker = active_ticker
+            if len(tokens) >= 2:
+                ticker = tokens[1].upper()
+            if not ticker:
+                print("No active ticker. Use /use TICKER or pass a ticker to /refresh.")
+                continue
+            active_ticker = ticker
+            refresh_args = argparse.Namespace(**vars(args))
+            refresh_args.command = "investigate"
+            refresh_args.ticker = ticker
+            refresh_args.query = f"Investigate {ticker}"
+            refresh_args.time_horizon = "long_term"
+            refresh_args.objective = "long_term_compounding"
+            refresh_args.json = False
+            _handle_investigate(refresh_args)
+            continue
+
+        if command == "/chat":
+            ticker = active_ticker
+            question_tokens = tokens[1:]
+            if len(tokens) >= 3 and tokens[1].isalnum() and len(tokens[1]) <= 10:
+                ticker = tokens[1].upper()
+                question_tokens = tokens[2:]
+            if not ticker:
+                print("No active ticker. Use /use TICKER or pass a ticker to /chat.")
+                continue
+            if not question_tokens:
+                print("Usage: /chat [TICKER] question")
+                continue
+            active_ticker = ticker
+            chat_args = argparse.Namespace(**vars(args))
+            chat_args.command = "chat"
+            chat_args.ticker = ticker
+            chat_args.question = " ".join(question_tokens)
+            chat_args.refresh = False
+            _handle_chat(chat_args)
+            continue
+
+        if raw.startswith("/"):
+            print(f"Unknown command: {command}")
+            continue
+
+        if not active_ticker:
+            print("No active ticker. Use /use TICKER or start with /investigate TICKER.")
+            continue
+        chat_args = argparse.Namespace(**vars(args))
+        chat_args.command = "chat"
+        chat_args.ticker = active_ticker
+        chat_args.question = raw
+        chat_args.refresh = False
+        _handle_chat(chat_args)
 
 
 def _connector_bundle_from_args(args) -> ConnectorBundle | None:
