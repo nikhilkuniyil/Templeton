@@ -20,8 +20,10 @@ from .connectors import (
 from .conversation import ConversationalInterface
 from .benchmarks import BenchmarkHarness, format_suite_result
 from .demo_data import demo_connector_bundle
+from .llm import LLMError, OpenAIResponsesClient
 from .models import AgentEnvelope, ResearchRequest
 from .orchestrator import InvestigationOrchestrator
+from .research_manager import LLMResearchManager
 from .run_store import LocalRunStore
 
 
@@ -35,6 +37,8 @@ def build_parser() -> argparse.ArgumentParser:
     investigate.add_argument("--time-horizon", default="long_term", help="Investment horizon label")
     investigate.add_argument("--objective", default="long_term_compounding", help="Research objective")
     investigate.add_argument("--json", action="store_true", help="Print raw JSON output")
+    investigate.add_argument("--llm", action="store_true", help="Use an LLM to produce an upgraded final memo")
+    investigate.add_argument("--llm-model", default="gpt-5.4-mini", help="LLM model to use when --llm is enabled")
     investigate.add_argument("--demo", action="store_true", help="Use built-in demo connector data")
     investigate.add_argument("--live-filings", action="store_true", help="Use live SEC filings with empty market/news connectors")
     investigate.add_argument(
@@ -56,6 +60,8 @@ def build_parser() -> argparse.ArgumentParser:
     chat = subparsers.add_parser("chat", help="Ask a conversational research question")
     chat.add_argument("ticker", help="Ticker symbol to discuss")
     chat.add_argument("question", help="Question to ask")
+    chat.add_argument("--llm", action="store_true", help="Use an LLM for the final conversational answer")
+    chat.add_argument("--llm-model", default="gpt-5.4-mini", help="LLM model to use when --llm is enabled")
     chat.add_argument("--demo", action="store_true", help="Use built-in demo connector data")
     chat.add_argument("--refresh", action="store_true", help="Run a fresh investigation before answering")
     chat.add_argument("--live-filings", action="store_true", help="Use live SEC filings with empty market/news connectors")
@@ -149,6 +155,15 @@ def _handle_investigate(args) -> int:
         if output.key_points:
             for point in output.key_points[:3]:
                 print(f"- {point}")
+    if args.llm:
+        try:
+            manager = _llm_manager_from_args(args)
+            llm_answer = manager.compose_investigation_answer(request, run.outputs)
+        except (ConnectorError, LLMError) as exc:
+            print(f"\n[llm]\nLLM error: {exc}")
+            return 1
+        print("\n[llm]")
+        print(llm_answer)
     return 0
 
 
@@ -186,6 +201,16 @@ def _handle_chat(args) -> int:
         prior_research = run.outputs
 
     interface = ConversationalInterface()
+    if args.llm and prior_research:
+        try:
+            manager = _llm_manager_from_args(args)
+            answer = manager.answer_chat(request, prior_research)
+        except (ConnectorError, LLMError) as exc:
+            print(f"LLM error: {exc}")
+            return 1
+        print(answer)
+        return 0
+
     result = interface.respond(request, prior_research=prior_research)
     print(result.answer)
 
@@ -251,6 +276,14 @@ def _connector_bundle_from_args(args) -> ConnectorBundle | None:
             news=YahooFinanceNewsClient(user_agent=args.sec_user_agent),
         )
     return None
+
+
+def _llm_manager_from_args(args) -> LLMResearchManager:
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise ConnectorError("OPENAI_API_KEY is not set. Export it before using --llm.")
+    client = OpenAIResponsesClient(api_key=api_key, model=args.llm_model)
+    return LLMResearchManager(client)
 
 
 if __name__ == "__main__":
