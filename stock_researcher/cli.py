@@ -29,6 +29,7 @@ from .models import AgentEnvelope, ResearchRequest
 from .orchestrator import InvestigationOrchestrator
 from .research_manager import LLMResearchManager, ManagerLoop
 from .run_store import LocalRunStore
+from .workspace import WorkspaceStore
 
 
 @dataclass
@@ -54,6 +55,8 @@ class ChatResult:
 @dataclass
 class ShellSession:
     active_ticker: str | None = None
+    active_watchlist: str | None = None
+    active_portfolio: str = "default"
     active_model_provider: str = "openai"
     active_model_name: str = "gpt-5.4-mini"
     display_mode: str = "default"
@@ -71,6 +74,7 @@ class ShellIntentDecision:
     needs_refresh: bool = False
     clarification: str | None = None
     original_input: str = ""
+    payload: dict[str, object] = field(default_factory=dict)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -249,6 +253,7 @@ def _execute_investigation(args) -> InvestigationResult:
     except ConnectorError:
         raise
     run_store = LocalRunStore(args.store_dir)
+    workspace_store = WorkspaceStore(args.store_dir)
     runtime = AgentRuntime(run_store=run_store)
     ticker = args.ticker.upper()
     request = ResearchRequest(
@@ -293,6 +298,11 @@ def _execute_investigation(args) -> InvestigationResult:
             source_packets=source_packets or {ticker: _SP(ticker)},
             steps=result.agents_run,
         )
+        workspace_store.update_dossier_from_outputs(
+            ticker=ticker,
+            outputs=result.outputs,
+            run_id=str(run_dir).rsplit("/", 1)[-1],
+        )
         return InvestigationResult(
             ticker=ticker,
             question=request.user_query,
@@ -320,6 +330,11 @@ def _execute_investigation(args) -> InvestigationResult:
                 model=llm_response.model,
                 provider=llm_response.provider,
             )
+    workspace_store.update_dossier_from_outputs(
+        ticker=ticker,
+        outputs=run.outputs,
+        run_id=str(run.artifact_dir).rsplit("/", 1)[-1] if run.artifact_dir is not None else None,
+    )
     return InvestigationResult(
         ticker=ticker,
         question=request.user_query,
@@ -502,18 +517,30 @@ def _shell_rules_text() -> str:
     )
 
 
-def _print_shell_memory(session: ShellSession) -> None:
+def _print_shell_memory(session: ShellSession, workspace_store: WorkspaceStore) -> None:
+    summary = workspace_store.workspace_summary()
     print("Session memory:")
     print(f"- Active ticker: {session.active_ticker or 'none'}")
+    print(f"- Active watchlist: {session.active_watchlist or 'none'}")
+    print(f"- Active portfolio: {session.active_portfolio}")
     print(f"- Model: {session.active_model_provider}/{session.active_model_name}")
     print(f"- Display mode: {session.display_mode}")
     print(f"- Latest decision: {session.latest_decision or 'none'}")
     print(f"- Latest what changed: {session.latest_what_changed or 'none'}")
+    print(f"- Watchlists: {summary['watchlist_count']}")
+    print(f"- Portfolio positions: {summary['portfolio_position_count']}")
+    if summary["priority_themes"]:
+        print(f"- Priority themes: {', '.join(summary['priority_themes'])}")
     if session.conversation_context:
         print(f"- Recent context: {session.conversation_context[-1]}")
 
 
-def _handle_shell_meta_command(tokens: list[str], session: ShellSession, run_store: LocalRunStore) -> bool:
+def _handle_shell_meta_command(
+    tokens: list[str],
+    session: ShellSession,
+    run_store: LocalRunStore,
+    workspace_store: WorkspaceStore,
+) -> bool:
     command = tokens[0]
     if command == "/help":
         print("Natural language handles research tasks.")
@@ -530,6 +557,7 @@ def _handle_shell_meta_command(tokens: list[str], session: ShellSession, run_sto
         return True
     if command == "/clear":
         session.active_ticker = None
+        session.active_watchlist = None
         session.conversation_context.clear()
         session.latest_run_id = None
         session.latest_decision = None
@@ -537,7 +565,7 @@ def _handle_shell_meta_command(tokens: list[str], session: ShellSession, run_sto
         print("Session context cleared.")
         return True
     if command == "/memory":
-        _print_shell_memory(session)
+        _print_shell_memory(session, workspace_store)
         return True
     if command == "/history":
         ticker = session.active_ticker
@@ -591,6 +619,19 @@ def _extract_tickers(text: str) -> list[str]:
     return candidates
 
 
+def _extract_symbol_like_tokens(text: str) -> list[str]:
+    stopwords = {"i", "own", "and", "to", "my", "portfolio", "add", "include"}
+    candidates: list[str] = []
+    for token in re.findall(r"\b[A-Za-z]{1,5}\b", text):
+        lowered = token.lower()
+        if lowered in stopwords:
+            continue
+        upper = token.upper()
+        if upper not in candidates:
+            candidates.append(upper)
+    return candidates
+
+
 def _needs_refresh(text: str) -> bool:
     lowered = text.lower()
     return any(term in lowered for term in ("refresh", "latest", "current", "today", "news", "price", "right now"))
@@ -611,6 +652,166 @@ def _wants_investigation(text: str, prior_outputs: dict[str, AgentEnvelope]) -> 
     if any(term in lowered for term in ("investigate", "look into", "analyze", "research", "worth buying", "should i buy")):
         return True
     return not prior_outputs
+
+
+def _parse_watchlist_intent(raw: str, session: ShellSession) -> ShellIntentDecision | None:
+    lowered = raw.lower().strip()
+    if lowered in {"show my watchlists", "list my watchlists", "show watchlists", "list watchlists"}:
+        return ShellIntentDecision(
+            intent="manage_watchlist",
+            original_input=raw,
+            payload={"action": "list_all"},
+        )
+
+    match = re.search(r"(?P<verb>show|list|rank)\s+(?:my\s+)?(?P<name>[a-z0-9][a-z0-9 _-]*?)\s+watchlist\b", lowered)
+    if match:
+        action = "rank" if match.group("verb") == "rank" else "show"
+        return ShellIntentDecision(
+            intent="manage_watchlist",
+            original_input=raw,
+            payload={"action": action, "watchlist": match.group("name").strip()},
+        )
+
+    add_match = re.search(
+        r"(?:add|put)\s+(?:(?P<this>this)|(?P<ticker>[A-Z]{1,5}))\s+(?:to|on)\s+(?:my\s+)?(?P<name>[A-Za-z0-9][A-Za-z0-9 _-]*?)\s+watchlist\b",
+        raw,
+        re.IGNORECASE,
+    )
+    if add_match:
+        ticker = add_match.group("ticker").upper() if add_match.group("ticker") else session.active_ticker
+        if ticker is None:
+            return ShellIntentDecision(
+                intent="clarifying_question",
+                clarification="I need a ticker before I can add it to a watchlist.",
+                original_input=raw,
+            )
+        return ShellIntentDecision(
+            intent="manage_watchlist",
+            ticker=ticker,
+            original_input=raw,
+            payload={"action": "add", "watchlist": add_match.group("name").strip(), "ticker": ticker},
+        )
+    return None
+
+
+def _parse_note_intent(raw: str, session: ShellSession) -> ShellIntentDecision | None:
+    watchlist_match = re.search(
+        r"save a note for (?:my\s+)?(?P<name>[A-Za-z0-9][A-Za-z0-9 _-]*?)\s+watchlist that (?P<body>.+)$",
+        raw,
+        re.IGNORECASE,
+    )
+    if watchlist_match:
+        return ShellIntentDecision(
+            intent="capture_research_note",
+            original_input=raw,
+            payload={
+                "scope_type": "watchlist",
+                "scope_id": watchlist_match.group("name").strip(),
+                "body": watchlist_match.group("body").strip(),
+                "watchlist": watchlist_match.group("name").strip(),
+            },
+        )
+
+    ticker_match = re.search(
+        r"save a note(?: on| for)?\s+(?P<ticker>[A-Z]{1,5})\s+that\s+(?P<body>.+)$",
+        raw,
+        re.IGNORECASE,
+    )
+    if ticker_match:
+        return ShellIntentDecision(
+            intent="capture_research_note",
+            ticker=ticker_match.group("ticker").upper(),
+            original_input=raw,
+            payload={
+                "scope_type": "ticker",
+                "scope_id": ticker_match.group("ticker").upper(),
+                "body": ticker_match.group("body").strip(),
+                "ticker": ticker_match.group("ticker").upper(),
+            },
+        )
+
+    generic_match = re.search(r"(?:save a note that|note that|remember that)\s+(?P<body>.+)$", raw, re.IGNORECASE)
+    if generic_match:
+        if session.active_ticker is None and session.active_watchlist is None:
+            return ShellIntentDecision(
+                intent="clarifying_question",
+                clarification="I can save that note, but I need a ticker or watchlist context first.",
+                original_input=raw,
+            )
+        if session.active_ticker is not None:
+            return ShellIntentDecision(
+                intent="capture_research_note",
+                ticker=session.active_ticker,
+                original_input=raw,
+                payload={
+                    "scope_type": "ticker",
+                    "scope_id": session.active_ticker,
+                    "body": generic_match.group("body").strip(),
+                    "ticker": session.active_ticker,
+                },
+            )
+        return ShellIntentDecision(
+            intent="capture_research_note",
+            original_input=raw,
+            payload={
+                "scope_type": "watchlist",
+                "scope_id": session.active_watchlist,
+                "body": generic_match.group("body").strip(),
+                "watchlist": session.active_watchlist,
+            },
+        )
+    return None
+
+
+def _parse_portfolio_update_intent(raw: str) -> ShellIntentDecision | None:
+    lowered = raw.lower()
+    if lowered in {"show my portfolio", "list my portfolio"}:
+        return ShellIntentDecision(
+            intent="manage_portfolio",
+            original_input=raw,
+            payload={"action": "show"},
+        )
+
+    if "more money into" in lowered or "more exposure to" in lowered or lowered.startswith("prioritize ") or "focus more on" in lowered:
+        match = re.search(r"(?:more money into|more exposure to|prioritize|focus more on)\s+(?P<theme>[a-z0-9][a-z0-9 &_-]*)", lowered)
+        if match:
+            return ShellIntentDecision(
+                intent="manage_portfolio",
+                original_input=raw,
+                payload={"action": "prioritize_theme", "theme": match.group("theme").strip()},
+            )
+
+    if " to my portfolio" in lowered or lowered.startswith("i own "):
+        tickers = _extract_symbol_like_tokens(raw)
+        if tickers:
+            return ShellIntentDecision(
+                intent="manage_portfolio",
+                original_input=raw,
+                payload={"action": "add_positions", "tickers": tickers},
+            )
+    return None
+
+
+def _parse_portfolio_question(raw: str) -> ShellIntentDecision | None:
+    lowered = raw.lower()
+    if any(
+        phrase in lowered
+        for phrase in (
+            "where should new money go",
+            "where should i put new money",
+            "what industries am i underweight in",
+            "what am i missing before buying more",
+            "which names are closest to buy-ready",
+            "which names are closest to ready",
+        )
+    ):
+        theme_match = re.search(r"(?:into|in)\s+(?P<theme>[a-z0-9][a-z0-9 &_-]*)", lowered)
+        return ShellIntentDecision(
+            intent="portfolio_allocation_question",
+            original_input=raw,
+            payload={"theme": theme_match.group("theme").strip() if theme_match else None},
+        )
+    return None
 
 
 def _update_shell_session_from_outputs(session: ShellSession, result: InvestigationResult) -> None:
@@ -647,9 +848,173 @@ def _render_shell_investigation_result(
     _render_investigation_result(result, verbose=_shell_verbose(session))
 
 
-def _classify_shell_input(raw: str, session: ShellSession, run_store: LocalRunStore) -> ShellIntentDecision:
-    tickers = _extract_tickers(raw)
+def _render_watchlist_view(view: dict) -> None:
+    print(f"Watchlist: {view['name']}")
+    if not view["entries"]:
+        print("No tickers yet.")
+        return
+    for entry in view["entries"]:
+        decision = (entry.get("decision") or "unknown").upper()
+        confidence = (entry.get("confidence") or "unknown").upper()
+        readiness = entry.get("readiness_status", "unknown")
+        print(f"- {entry['ticker']}: {decision} | confidence={confidence} | readiness={readiness}")
+        if entry.get("top_reason"):
+            print(f"  Reason: {entry['top_reason']}")
+        if entry.get("what_changed"):
+            print(f"  What changed: {entry['what_changed']}")
+        if entry.get("open_questions"):
+            print(f"  Open questions: {', '.join(entry['open_questions'][:2])}")
+
+
+def _render_watchlist_index(watchlists: list[dict]) -> None:
+    print("Watchlists:")
+    if not watchlists:
+        print("- None yet.")
+        return
+    for watchlist in watchlists:
+        print(f"- {watchlist['name']}: {len(watchlist.get('tickers', []))} tickers")
+
+
+def _render_portfolio_summary(summary: dict) -> None:
+    print("Portfolio:")
+    print(f"- Positions: {summary['position_count']}")
+    if summary["priority_themes"]:
+        print(f"- Priority themes: {', '.join(summary['priority_themes'])}")
+    if summary["underweight_themes"]:
+        print(f"- Underweight themes: {', '.join(summary['underweight_themes'])}")
+
+
+def _render_allocation_view(view: dict, raw: str) -> None:
     lowered = raw.lower()
+    if "underweight" in lowered:
+        themes = view["underweight_themes"] or view["priority_themes"]
+        if themes:
+            print(f"Priority themes with the least current portfolio representation: {', '.join(themes)}.")
+        else:
+            print("I do not have enough portfolio theme context yet. Tell me which industries you want more exposure to.")
+        return
+
+    if "missing before buying more" in lowered:
+        theme = view.get("theme") or "that theme"
+        if not view["candidates"]:
+            print(f"I do not have researched candidates saved for {theme}. Add names to a watchlist or investigate them first.")
+            return
+        print(f"Main blockers before buying more into {theme}:")
+        for candidate in view["candidates"][:3]:
+            blockers = candidate.get("open_questions") or candidate.get("key_risks") or ["Need deeper work."]
+            print(f"- {candidate['ticker']}: {', '.join(blockers[:2])}")
+        return
+
+    if not view["candidates"]:
+        print("I do not have enough ranked candidates yet. Add names to a watchlist and investigate them first.")
+        return
+
+    print("Best current candidates for new capital:")
+    for idx, candidate in enumerate(view["candidates"][:3], start=1):
+        decision = (candidate.get("decision") or "unknown").upper()
+        readiness = candidate.get("readiness_status", "unknown")
+        print(f"{idx}. {candidate['ticker']} from {candidate['watchlist']} | {decision} | readiness={readiness}")
+        if candidate.get("top_reason"):
+            print(f"   {candidate['top_reason']}")
+
+
+def _handle_workspace_intent(
+    decision: ShellIntentDecision,
+    session: ShellSession,
+    workspace_store: WorkspaceStore,
+) -> bool:
+    if session.display_mode == "debug":
+        print(f"[debug] intent={decision.intent} payload={decision.payload}")
+
+    if decision.intent == "manage_watchlist":
+        action = decision.payload.get("action")
+        if action == "list_all":
+            _render_watchlist_index(workspace_store.list_watchlists())
+            return True
+        watchlist_name = str(decision.payload.get("watchlist", "")).strip()
+        if action == "add":
+            ticker = str(decision.payload["ticker"])
+            watchlist = workspace_store.add_to_watchlist(watchlist_name, ticker)
+            session.active_watchlist = watchlist["name"]
+            session.active_ticker = ticker
+            print(f"Added {ticker} to the {watchlist['name']} watchlist.")
+            return True
+        if action in {"show", "rank"}:
+            ranked = workspace_store.rank_watchlist(watchlist_name)
+            if ranked is None:
+                print(f"I do not have a watchlist named {watchlist_name}.")
+                return True
+            session.active_watchlist = ranked["name"]
+            _render_watchlist_view(ranked)
+            return True
+        return True
+
+    if decision.intent == "capture_research_note":
+        note = workspace_store.save_note(
+            str(decision.payload["body"]),
+            scope_type=str(decision.payload["scope_type"]),
+            scope_id=str(decision.payload["scope_id"]),
+            ticker=decision.payload.get("ticker"),
+            watchlist=decision.payload.get("watchlist"),
+        )
+        if note.get("ticker"):
+            session.active_ticker = str(note["ticker"])
+        if note.get("watchlist"):
+            session.active_watchlist = str(note["watchlist"])
+        print("Saved note.")
+        print(f"- {note['body']}")
+        return True
+
+    if decision.intent == "manage_portfolio":
+        action = decision.payload.get("action")
+        if action == "show":
+            _render_portfolio_summary(workspace_store.summarize_portfolio())
+            return True
+        if action == "prioritize_theme":
+            theme = str(decision.payload["theme"]).strip()
+            workspace_store.add_priority_theme(theme)
+            print(f"Added {theme} as a priority theme for new capital.")
+            return True
+        if action == "add_positions":
+            tickers = [str(ticker).upper() for ticker in decision.payload.get("tickers", [])]
+            for ticker in tickers:
+                workspace_store.add_position(ticker)
+            print(f"Added to portfolio: {', '.join(tickers)}.")
+            _render_portfolio_summary(workspace_store.summarize_portfolio())
+            return True
+        return True
+
+    if decision.intent == "portfolio_allocation_question":
+        theme = decision.payload.get("theme")
+        view = workspace_store.allocation_view(str(theme) if theme else None)
+        _render_allocation_view(view, decision.original_input)
+        return True
+
+    return False
+
+
+def _classify_shell_input(
+    raw: str,
+    session: ShellSession,
+    run_store: LocalRunStore,
+    workspace_store: WorkspaceStore,
+) -> ShellIntentDecision:
+    tickers = _extract_tickers(raw)
+    watchlist_decision = _parse_watchlist_intent(raw, session)
+    if watchlist_decision is not None:
+        return watchlist_decision
+
+    note_decision = _parse_note_intent(raw, session)
+    if note_decision is not None:
+        return note_decision
+
+    portfolio_update = _parse_portfolio_update_intent(raw)
+    if portfolio_update is not None:
+        return portfolio_update
+
+    portfolio_question = _parse_portfolio_question(raw)
+    if portfolio_question is not None:
+        return portfolio_question
 
     if _wants_compare(raw):
         if len(tickers) >= 2:
@@ -701,7 +1066,7 @@ def _classify_shell_input(raw: str, session: ShellSession, run_store: LocalRunSt
             original_input=raw,
         )
 
-    if _wants_investigation(lowered, prior_outputs):
+    if _wants_investigation(raw, prior_outputs):
         return ShellIntentDecision(
             intent="investigate_stock",
             ticker=ticker,
@@ -729,11 +1094,21 @@ def _build_shell_args(base_args, ticker: str, *, query: str | None = None, refre
     return shell_args
 
 
-def _handle_shell_natural_language(raw: str, session: ShellSession, base_args, run_store: LocalRunStore) -> None:
-    decision = _classify_shell_input(raw, session, run_store)
+def _handle_shell_natural_language(
+    raw: str,
+    session: ShellSession,
+    base_args,
+    run_store: LocalRunStore,
+    workspace_store: WorkspaceStore,
+) -> None:
+    decision = _classify_shell_input(raw, session, run_store, workspace_store)
 
     if decision.intent == "clarifying_question":
         print(decision.clarification)
+        return
+
+    if _handle_workspace_intent(decision, session, workspace_store):
+        session.conversation_context.append(raw)
         return
 
     if decision.intent == "compare_stocks":
@@ -802,6 +1177,7 @@ def _handle_shell(args) -> int:
         display_mode=args.display_mode,
     )
     run_store = LocalRunStore(args.store_dir)
+    workspace_store = WorkspaceStore(args.store_dir)
     print("Templeton shell")
     print("Use natural language for research. Slash commands are for session control.")
     print("Commands: /model, /rules, /clear, /memory, /history, /help, /quit")
@@ -831,10 +1207,10 @@ def _handle_shell(args) -> int:
 
         command = tokens[0]
         if raw.startswith("/"):
-            if not _handle_shell_meta_command(tokens, session, run_store):
+            if not _handle_shell_meta_command(tokens, session, run_store, workspace_store):
                 print(f"Unknown command: {command}")
             continue
-        _handle_shell_natural_language(raw, session, args, run_store)
+        _handle_shell_natural_language(raw, session, args, run_store, workspace_store)
 
 
 def _connector_bundle_from_args(args) -> ConnectorBundle | None:

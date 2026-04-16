@@ -104,3 +104,30 @@ def test_cli_shell_debug_mode_shows_routing(monkeypatch, capsys, tmp_path) -> No
     captured = capsys.readouterr()
     assert exit_code == 0
     assert "[debug] intent=investigate_stock ticker=ASML refresh=False" in captured.out
+
+
+def test_cli_shell_supports_workspace_flows(monkeypatch, capsys, tmp_path) -> None:
+    commands = iter(
+        [
+            "look into ASML for a 5 year hold",
+            "add this to my semis watchlist",
+            "save a note that I only want to buy on a pullback",
+            "show my semis watchlist",
+            "I want more money into semis",
+            "what am I missing before buying more into semis",
+            "/memory",
+            "/quit",
+        ]
+    )
+    monkeypatch.setattr("builtins.input", lambda _: next(commands))
+
+    exit_code = main(["shell", "--demo", "--store-dir", str(tmp_path)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Added ASML to the semis watchlist." in captured.out
+    assert "Saved note." in captured.out
+    assert "Watchlist: semis" in captured.out
+    assert "Added semis as a priority theme for new capital." in captured.out
+    assert "Main blockers before buying more into semis:" in captured.out
+    assert "Priority themes: semis" in captured.out
