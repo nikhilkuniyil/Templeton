@@ -556,6 +556,37 @@ def _print_shell_memory(session: ShellSession, workspace_store: WorkspaceStore) 
         print(f"- Recent context: {session.conversation_context[-1]}")
 
 
+def _print_shell_status(session: ShellSession) -> None:
+    parts = [
+        f"ticker={session.active_ticker or '-'}",
+        f"decision={(session.latest_decision or '-').upper() if session.latest_decision else '-'}",
+    ]
+    if session.active_watchlist:
+        parts.append(f"watchlist={session.active_watchlist}")
+    print(f"[context] {' | '.join(parts)}")
+
+
+def _missing_ticker_guidance() -> str:
+    return (
+        "I need a ticker. Try: look into ASML for a 5 year hold. "
+        "If you want workspace help first, try: add ASML to my semis watchlist."
+    )
+
+
+def _missing_history_ticker_guidance() -> str:
+    return (
+        "I need a ticker to show thesis history or what changed. "
+        "Try: what changed for ASML since last time?"
+    )
+
+
+def _missing_note_context_guidance() -> str:
+    return (
+        "I can save that note, but I need a ticker or watchlist context first. "
+        "Try: save a note on ASML that I only want to buy on a pullback."
+    )
+
+
 def _shell_data_summary(args) -> str:
     tavily_enabled = getattr(args, "tavily", False) or bool(os.getenv("TAVILY_API_KEY"))
     if getattr(args, "demo", False):
@@ -640,6 +671,11 @@ def _handle_shell_meta_command(
         print("- /mode [default|verbose|debug]")
         print("- /history [TICKER] [limit]")
         print("- /quit")
+        print()
+        print("Workspace memory:")
+        print("- Watchlists store candidate names by theme or industry.")
+        print("- Portfolio memory stores positions and priority themes for new capital.")
+        print("- Notes attach to a ticker or watchlist and persist across sessions.")
         print()
         print("Current session:")
         for line in _shell_session_summary(args, session):
@@ -775,7 +811,7 @@ def _parse_watchlist_intent(raw: str, session: ShellSession) -> ShellIntentDecis
         if ticker is None:
             return ShellIntentDecision(
                 intent="clarifying_question",
-                clarification="I need a ticker before I can add it to a watchlist.",
+                clarification="I need a ticker before I can add it to a watchlist. Try: add ASML to my semis watchlist.",
                 original_input=raw,
             )
         return ShellIntentDecision(
@@ -828,7 +864,7 @@ def _parse_note_intent(raw: str, session: ShellSession) -> ShellIntentDecision |
         if session.active_ticker is None and session.active_watchlist is None:
             return ShellIntentDecision(
                 intent="clarifying_question",
-                clarification="I can save that note, but I need a ticker or watchlist context first.",
+                clarification=_missing_note_context_guidance(),
                 original_input=raw,
             )
         if session.active_ticker is not None:
@@ -929,6 +965,7 @@ def _render_shell_chat_result(result: ChatResult, session: ShellSession, decisio
     print(result.answer)
     if result.next_action and session.display_mode in {"verbose", "debug"}:
         print(f"Next action: {result.next_action}")
+    _print_shell_status(session)
 
 
 def _render_shell_investigation_result(
@@ -939,6 +976,7 @@ def _render_shell_investigation_result(
     if session.display_mode == "debug":
         print(f"[debug] intent={decision.intent} ticker={decision.ticker} refresh={decision.needs_refresh}")
     _render_investigation_result(result, verbose=_shell_verbose(session))
+    _print_shell_status(session)
 
 
 def _render_watchlist_view(view: dict) -> None:
@@ -1023,6 +1061,7 @@ def _handle_workspace_intent(
         action = decision.payload.get("action")
         if action == "list_all":
             _render_watchlist_index(workspace_store.list_watchlists())
+            _print_shell_status(session)
             return True
         watchlist_name = str(decision.payload.get("watchlist", "")).strip()
         if action == "add":
@@ -1031,6 +1070,7 @@ def _handle_workspace_intent(
             session.active_watchlist = watchlist["name"]
             session.active_ticker = ticker
             print(f"Added {ticker} to the {watchlist['name']} watchlist.")
+            _print_shell_status(session)
             return True
         if action in {"show", "rank"}:
             ranked = workspace_store.rank_watchlist(watchlist_name)
@@ -1039,6 +1079,7 @@ def _handle_workspace_intent(
                 return True
             session.active_watchlist = ranked["name"]
             _render_watchlist_view(ranked)
+            _print_shell_status(session)
             return True
         return True
 
@@ -1056,17 +1097,20 @@ def _handle_workspace_intent(
             session.active_watchlist = str(note["watchlist"])
         print("Saved note.")
         print(f"- {note['body']}")
+        _print_shell_status(session)
         return True
 
     if decision.intent == "manage_portfolio":
         action = decision.payload.get("action")
         if action == "show":
             _render_portfolio_summary(workspace_store.summarize_portfolio())
+            _print_shell_status(session)
             return True
         if action == "prioritize_theme":
             theme = str(decision.payload["theme"]).strip()
             workspace_store.add_priority_theme(theme)
             print(f"Added {theme} as a priority theme for new capital.")
+            _print_shell_status(session)
             return True
         if action == "add_positions":
             tickers = [str(ticker).upper() for ticker in decision.payload.get("tickers", [])]
@@ -1074,6 +1118,7 @@ def _handle_workspace_intent(
                 workspace_store.add_position(ticker)
             print(f"Added to portfolio: {', '.join(tickers)}.")
             _render_portfolio_summary(workspace_store.summarize_portfolio())
+            _print_shell_status(session)
             return True
         return True
 
@@ -1081,6 +1126,7 @@ def _handle_workspace_intent(
         theme = decision.payload.get("theme")
         view = workspace_store.allocation_view(str(theme) if theme else None)
         _render_allocation_view(view, decision.original_input)
+        _print_shell_status(session)
         return True
 
     return False
@@ -1133,7 +1179,7 @@ def _classify_shell_input(
         if ticker is None:
             return ShellIntentDecision(
                 intent="clarifying_question",
-                clarification="I need a ticker to show thesis history or what changed.",
+                clarification=_missing_history_ticker_guidance(),
                 original_input=raw,
             )
         return ShellIntentDecision(
@@ -1145,7 +1191,7 @@ def _classify_shell_input(
     if ticker is None:
         return ShellIntentDecision(
             intent="clarifying_question",
-            clarification="I need a ticker. Example: look into ASML for a 5 year hold.",
+            clarification=_missing_ticker_guidance(),
             original_input=raw,
         )
 

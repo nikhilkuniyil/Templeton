@@ -72,6 +72,7 @@ def test_cli_shell_supports_investigate_chat_and_history(monkeypatch, capsys, tm
     assert "Session memory:" in captured.out
     assert "Investigation: ASML" in captured.out or "Investigation (agentic): ASML" in captured.out
     assert "Prior research leans WATCH" in captured.out
+    assert "[context] ticker=ASML | decision=WATCH" in captured.out
     assert "History: ASML" in captured.out
     assert "Session context cleared." in captured.out
 
@@ -90,6 +91,7 @@ def test_cli_shell_requests_clarification_without_ticker(monkeypatch, capsys, tm
     captured = capsys.readouterr()
     assert exit_code == 0
     assert "I need a ticker to show thesis history or what changed." in captured.out
+    assert "what changed for ASML since last time?" in captured.out
 
 
 def test_cli_shell_debug_mode_shows_routing(monkeypatch, capsys, tmp_path) -> None:
@@ -145,6 +147,7 @@ def test_cli_shell_supports_workspace_flows(monkeypatch, capsys, tmp_path) -> No
     assert "Added semis as a priority theme for new capital." in captured.out
     assert "Main blockers before buying more into semis:" in captured.out
     assert "Priority themes: semis" in captured.out
+    assert "[context] ticker=ASML | decision=WATCH | watchlist=semis" in captured.out
 
 
 def test_cli_shell_help_matches_natural_language_session(monkeypatch, capsys, tmp_path) -> None:
@@ -163,4 +166,22 @@ def test_cli_shell_help_matches_natural_language_session(monkeypatch, capsys, tm
     assert "Templeton help" in captured.out
     assert "Research and workspace tasks use natural language." in captured.out
     assert "/mode [default|verbose|debug]" in captured.out
+    assert "Workspace memory:" in captured.out
     assert "Current session:" in captured.out
+
+
+def test_cli_shell_note_without_context_gives_actionable_guidance(monkeypatch, capsys, tmp_path) -> None:
+    commands = iter(
+        [
+            "save a note that I only want to buy on a pullback",
+            "/quit",
+        ]
+    )
+    monkeypatch.setattr("builtins.input", lambda _: next(commands))
+
+    exit_code = main(["shell", "--demo", "--store-dir", str(tmp_path)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "I can save that note, but I need a ticker or watchlist context first." in captured.out
+    assert "save a note on ASML" in captured.out
