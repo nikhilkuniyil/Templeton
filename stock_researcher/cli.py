@@ -13,12 +13,14 @@ from uuid import uuid4
 
 from .agents import AgentRuntime
 from .connectors import (
+    CompositeNewsClient,
     ConnectorBundle,
     ConnectorError,
     FinancialDatasetsFilingsClient,
     FinancialDatasetsMarketDataClient,
     SecCompanyFactsMarketDataClient,
     SecFilingsClient,
+    TavilyNewsClient,
     YahooFinanceNewsClient,
 )
 from .conversation import ConversationalInterface
@@ -109,6 +111,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Use Financial Datasets for market data while keeping SEC filings and Yahoo news",
     )
     investigate.add_argument(
+        "--tavily",
+        action="store_true",
+        help="Add Tavily web search as a qualitative news layer for live runs",
+    )
+    investigate.add_argument(
         "--store-dir",
         default=".templeton",
         help="Local directory for run artifacts and history",
@@ -137,6 +144,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--financial-datasets",
         action="store_true",
         help="Use Financial Datasets for market data while keeping SEC filings and Yahoo news",
+    )
+    chat.add_argument(
+        "--tavily",
+        action="store_true",
+        help="Add Tavily web search as a qualitative news layer for live runs",
     )
     chat.add_argument(
         "--store-dir",
@@ -188,6 +200,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--financial-datasets",
         action="store_true",
         help="Use Financial Datasets as the primary structured-data backbone",
+    )
+    shell.add_argument(
+        "--tavily",
+        action="store_true",
+        help="Add Tavily web search as a qualitative news layer for live runs",
     )
     shell.add_argument(
         "--store-dir",
@@ -1220,6 +1237,7 @@ def _handle_shell(args) -> int:
 def _connector_bundle_from_args(args) -> ConnectorBundle | None:
     if getattr(args, "demo", False):
         return demo_connector_bundle()
+    news_client = _news_client_from_args(args)
     if getattr(args, "financial_datasets", False):
         api_key = os.getenv("FINANCIAL_DATASETS_API_KEY")
         if not api_key:
@@ -1234,15 +1252,31 @@ def _connector_bundle_from_args(args) -> ConnectorBundle | None:
                 fallback_client=sec_fallback,
             ),
             market_data=FinancialDatasetsMarketDataClient(api_key=api_key),
-            news=YahooFinanceNewsClient(user_agent=args.sec_user_agent),
+            news=news_client,
         )
     if getattr(args, "live_filings", False):
         return ConnectorBundle(
             filings=SecFilingsClient(user_agent=args.sec_user_agent),
             market_data=SecCompanyFactsMarketDataClient(user_agent=args.sec_user_agent),
-            news=YahooFinanceNewsClient(user_agent=args.sec_user_agent),
+            news=news_client,
         )
     return None
+
+
+def _news_client_from_args(args):
+    tavily_key = os.getenv("TAVILY_API_KEY")
+    use_tavily = getattr(args, "tavily", False) or bool(tavily_key)
+    yahoo = YahooFinanceNewsClient(user_agent=args.sec_user_agent)
+    if not use_tavily:
+        return yahoo
+    if not tavily_key:
+        raise ConnectorError("TAVILY_API_KEY is not set. Export it before enabling Tavily search.")
+    return CompositeNewsClient(
+        clients=[
+            TavilyNewsClient(api_key=tavily_key, user_agent=args.sec_user_agent),
+            yahoo,
+        ]
+    )
 
 
 def _llm_manager_from_args(args) -> LLMResearchManager:

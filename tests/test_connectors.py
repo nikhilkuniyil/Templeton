@@ -3,12 +3,15 @@ from urllib.error import HTTPError
 import pytest
 
 from stock_researcher.connectors import (
+    CompositeNewsClient,
     FinancialDatasetsFilingsClient,
     FinancialDatasetsMarketDataClient,
     SecCompanyFactsMarketDataClient,
     SecFilingsClient,
+    TavilyNewsClient,
     YahooFinanceNewsClient,
 )
+from stock_researcher.models import SourceDocument
 
 
 def test_sec_filings_client_builds_recent_documents() -> None:
@@ -392,3 +395,71 @@ def test_yahoo_finance_news_client_parses_rss_items() -> None:
     assert docs[0].source_name == "NVIDIA beats estimates as AI demand surges"
     assert docs[0].metadata["positive_catalysts"]
     assert docs[0].metadata["event_type"] == "headline"
+
+
+def test_tavily_news_client_parses_search_results() -> None:
+    def fake_post(url: str, headers: dict[str, str], payload: dict) -> dict:
+        assert url == "https://api.tavily.com/search"
+        assert headers["Authorization"] == "Bearer test-key"
+        assert payload["topic"] == "finance"
+        assert payload["max_results"] == 5
+        assert payload["time_range"] == "month"
+        return {
+            "query": payload["query"],
+            "results": [
+                {
+                    "title": "NVIDIA raises outlook as AI demand stays strong",
+                    "url": "https://example.com/nvda-tavily",
+                    "content": "Management raised guidance after another strong quarter and robust hyperscaler demand.",
+                    "score": 0.91,
+                    "published_date": "2026-04-14",
+                }
+            ],
+        }
+
+    client = TavilyNewsClient(api_key="test-key", post_json=fake_post)
+    docs = client.get_recent_news("NVDA")
+
+    assert len(docs) == 1
+    assert docs[0].source_name == "NVIDIA raises outlook as AI demand stays strong"
+    assert docs[0].metadata["positive_catalysts"]
+    assert docs[0].metadata["event_type"] == "web_search"
+    assert docs[0].metadata["data_provider"] == "tavily"
+    assert docs[0].published_at.startswith("2026-04-14")
+
+
+def test_composite_news_client_dedupes_overlapping_results() -> None:
+    tavily_doc = [
+        SourceDocument(
+            source_name="NVIDIA raises outlook as AI demand stays strong",
+            source_type="news",
+            source_url="https://example.com/shared",
+            published_at="2026-04-14T00:00:00+00:00",
+            retrieved_at="2026-04-15T00:00:00+00:00",
+            ticker="NVDA",
+            metadata={"event_type": "web_search"},
+        )
+    ]
+    yahoo_doc = [
+        SourceDocument(
+            source_name="Same headline from Yahoo",
+            source_type="news",
+            source_url="https://example.com/shared",
+            published_at="2026-04-13T00:00:00+00:00",
+            retrieved_at="2026-04-15T00:00:00+00:00",
+            ticker="NVDA",
+            metadata={"event_type": "headline"},
+        )
+    ]
+
+    client = CompositeNewsClient(
+        clients=[
+            type("StaticNews", (), {"get_recent_news": lambda self, ticker: tavily_doc})(),
+            type("StaticNews", (), {"get_recent_news": lambda self, ticker: yahoo_doc})(),
+        ]
+    )
+
+    docs = client.get_recent_news("NVDA")
+
+    assert len(docs) == 1
+    assert docs[0].source_name == "NVIDIA raises outlook as AI demand stays strong"

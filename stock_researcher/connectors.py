@@ -90,6 +90,39 @@ class EmptyNewsClient:
         return []
 
 
+@dataclass(slots=True)
+class CompositeNewsClient:
+    """Combines multiple news connectors and deduplicates overlapping results."""
+
+    clients: list[NewsClient] = field(default_factory=list)
+
+    def get_recent_news(self, ticker: str) -> list[SourceDocument]:
+        documents: list[SourceDocument] = []
+        errors: list[str] = []
+        for client in self.clients:
+            try:
+                documents.extend(client.get_recent_news(ticker))
+            except ConnectorError as exc:
+                errors.append(str(exc))
+        deduped = self._dedupe(documents)
+        if deduped:
+            return deduped
+        if errors:
+            raise ConnectorError("; ".join(errors))
+        return []
+
+    def _dedupe(self, documents: list[SourceDocument]) -> list[SourceDocument]:
+        deduped: dict[str, SourceDocument] = {}
+        for document in documents:
+            key = (document.source_url or "").strip().lower()
+            if not key:
+                key = f"{document.source_name.strip().lower()}::{document.published_at[:10]}"
+            existing = deduped.get(key)
+            if existing is None or document.published_at > existing.published_at:
+                deduped[key] = document
+        return sorted(deduped.values(), key=lambda item: item.published_at, reverse=True)
+
+
 def default_bytes_fetcher(url: str, headers: dict[str, str]) -> bytes:
     request = Request(url, headers=headers)
     with urlopen(request, timeout=20) as response:
@@ -101,6 +134,68 @@ def default_bytes_fetcher(url: str, headers: dict[str, str]) -> bytes:
 
 def default_url_fetcher(url: str, headers: dict[str, str]) -> dict:
     return json.loads(default_bytes_fetcher(url, headers).decode("utf-8"))
+
+
+def default_post_json_fetcher(url: str, headers: dict[str, str], payload: dict) -> dict:
+    request = Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    with urlopen(request, timeout=20) as response:
+        body = response.read()
+        if response.headers.get("Content-Encoding", "").lower() == "gzip":
+            body = gzip.decompress(body)
+        return json.loads(body.decode("utf-8"))
+
+
+def _headline_metadata(title: str, description: str, *, provider: str, event_type: str) -> dict:
+    combined = f"{title} {description}".lower()
+    positive_terms = [
+        "beat",
+        "beats",
+        "wins",
+        "surge",
+        "growth",
+        "raises",
+        "expand",
+        "expands",
+        "strong",
+        "record",
+        "approval",
+        "upgrade",
+        "upgrades",
+        "orders",
+        "demand",
+    ]
+    negative_terms = [
+        "miss",
+        "misses",
+        "cuts",
+        "probe",
+        "lawsuit",
+        "delay",
+        "drop",
+        "risk",
+        "weak",
+        "ban",
+        "recall",
+        "downgrade",
+        "decline",
+        "headwind",
+        "tariff",
+    ]
+    positive_hits = [term for term in positive_terms if term in combined]
+    negative_hits = [term for term in negative_terms if term in combined]
+    return {
+        "positive_catalysts": [f"{provider.title()} result suggests positive catalyst: {title}"] if positive_hits else [],
+        "negative_catalysts": [f"{provider.title()} result suggests risk catalyst: {title}"] if negative_hits else [],
+        "event_type": event_type,
+        "expected_impact": "high" if positive_hits or negative_hits else "medium",
+        "data_provider": provider,
+        "summary_snippet": description[:500],
+    }
 
 
 @dataclass(slots=True)
@@ -1344,6 +1439,104 @@ class FinancialDatasetsFilingsClient(FilingExtractionMixin):
 
 
 @dataclass(slots=True)
+class TavilyNewsClient:
+    """Fetches recent ticker news and qualitative context from Tavily search."""
+
+    api_key: str
+    user_agent: str = "TempletonResearch/0.1 (contact: local@example.com)"
+    base_url: str = "https://api.tavily.com/search"
+    topic: str = "finance"
+    search_depth: str = "basic"
+    max_results: int = 5
+    days: int = 14
+    post_json: Callable[[str, dict[str, str], dict], dict] = default_post_json_fetcher
+
+    def get_recent_news(self, ticker: str) -> list[SourceDocument]:
+        try:
+            payload = self._search_payload(ticker)
+            response = self.post_json(self.base_url, self._headers(), payload)
+            return self._documents_from_response(ticker=ticker, response=response)
+        except (HTTPError, URLError, ValueError, KeyError, TypeError) as exc:
+            raise ConnectorError(f"Tavily news lookup failed for {ticker.upper()}: {exc}") from exc
+
+    def _search_payload(self, ticker: str) -> dict:
+        payload = {
+            "query": f"{ticker.upper()} stock recent earnings guidance demand regulation catalysts",
+            "topic": self.topic,
+            "search_depth": self.search_depth,
+            "max_results": self.max_results,
+            "include_answer": False,
+            "include_raw_content": False,
+            "include_favicon": False,
+        }
+        if self.topic == "news":
+            payload["days"] = self.days
+        else:
+            payload["time_range"] = "month"
+        return payload
+
+    def _headers(self) -> dict[str, str]:
+        return {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": self.user_agent,
+        }
+
+    def _documents_from_response(self, ticker: str, response: dict) -> list[SourceDocument]:
+        results = response.get("results", [])
+        if not isinstance(results, list):
+            return []
+        retrieved_at = datetime.now(timezone.utc).isoformat()
+        documents: list[SourceDocument] = []
+        for result in results[: self.max_results]:
+            if not isinstance(result, dict):
+                continue
+            title = str(result.get("title", "")).strip()
+            url = str(result.get("url", "")).strip()
+            content = str(result.get("content", "")).strip()
+            published_at = self._published_to_iso(str(result.get("published_date", "")).strip(), retrieved_at)
+            metadata = _headline_metadata(
+                title=title,
+                description=content,
+                provider="tavily",
+                event_type="web_search",
+            )
+            metadata.update(
+                {
+                    "search_query": response.get("query", ""),
+                    "relevance_score": result.get("score"),
+                }
+            )
+            documents.append(
+                SourceDocument(
+                    source_name=title or f"{ticker.upper()} Tavily result",
+                    source_type="news",
+                    source_url=url or "https://tavily.com",
+                    published_at=published_at,
+                    retrieved_at=retrieved_at,
+                    ticker=ticker.upper(),
+                    metadata=metadata,
+                )
+            )
+        return documents
+
+    def _published_to_iso(self, value: str, fallback: str) -> str:
+        if not value:
+            return fallback
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return parsed.astimezone(timezone.utc).isoformat()
+        except ValueError:
+            pass
+        try:
+            parsed = datetime.strptime(value, "%Y-%m-%d")
+            return parsed.replace(tzinfo=timezone.utc).isoformat()
+        except ValueError:
+            return fallback
+
+
+@dataclass(slots=True)
 class YahooFinanceNewsClient:
     """Fetches recent ticker news headlines from Yahoo Finance RSS."""
 
@@ -1401,14 +1594,9 @@ class YahooFinanceNewsClient:
         return re.sub(r"<[^>]+>", "", value).strip()
 
     def _news_metadata(self, title: str, description: str) -> dict:
-        combined = f"{title} {description}".lower()
-        positive_terms = ["beat", "wins", "surge", "growth", "raises", "expands", "strong", "record"]
-        negative_terms = ["miss", "cuts", "probe", "lawsuit", "delay", "drop", "risk", "weak", "ban"]
-        positive_hits = [term for term in positive_terms if term in combined]
-        negative_hits = [term for term in negative_terms if term in combined]
-        return {
-            "positive_catalysts": [f"Headline suggests positive catalyst: {title}"] if positive_hits else [],
-            "negative_catalysts": [f"Headline suggests risk catalyst: {title}"] if negative_hits else [],
-            "event_type": "headline",
-            "expected_impact": "high" if positive_hits or negative_hits else "medium",
-        }
+        return _headline_metadata(
+            title=title,
+            description=description,
+            provider="yahoo_finance",
+            event_type="headline",
+        )
