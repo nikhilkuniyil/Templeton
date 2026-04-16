@@ -72,3 +72,35 @@ def test_cli_shell_supports_investigate_chat_and_history(monkeypatch, capsys, tm
     assert "Prior research leans WATCH" in captured.out
     assert "History: ASML" in captured.out
     assert "Session context cleared." in captured.out
+
+
+def test_cli_shell_requests_clarification_without_ticker(monkeypatch, capsys, tmp_path) -> None:
+    commands = iter(
+        [
+            "what changed since last time",
+            "/quit",
+        ]
+    )
+    monkeypatch.setattr("builtins.input", lambda _: next(commands))
+
+    exit_code = main(["shell", "--demo", "--store-dir", str(tmp_path)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "I need a ticker to show thesis history or what changed." in captured.out
+
+
+def test_cli_shell_debug_mode_shows_routing(monkeypatch, capsys, tmp_path) -> None:
+    commands = iter(
+        [
+            "look into ASML for a 5 year hold",
+            "/quit",
+        ]
+    )
+    monkeypatch.setattr("builtins.input", lambda _: next(commands))
+
+    exit_code = main(["shell", "--demo", "--display-mode", "debug", "--store-dir", str(tmp_path)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "[debug] intent=investigate_stock ticker=ASML refresh=False" in captured.out

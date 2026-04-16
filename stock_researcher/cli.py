@@ -56,10 +56,21 @@ class ShellSession:
     active_ticker: str | None = None
     active_model_provider: str = "openai"
     active_model_name: str = "gpt-5.4-mini"
+    display_mode: str = "default"
     conversation_context: list[str] = field(default_factory=list)
     latest_run_id: str | None = None
     latest_decision: str | None = None
     latest_what_changed: str | None = None
+
+
+@dataclass
+class ShellIntentDecision:
+    intent: str
+    ticker: str | None = None
+    compare_tickers: list[str] = field(default_factory=list)
+    needs_refresh: bool = False
+    clarification: str | None = None
+    original_input: str = ""
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -155,6 +166,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="LLM provider to use when --llm is enabled",
     )
     shell.add_argument("--llm-model", default="gpt-5.4-mini", help="LLM model to use when --llm is enabled")
+    shell.add_argument(
+        "--display-mode",
+        default="default",
+        choices=["default", "verbose", "debug"],
+        help="Shell rendering mode",
+    )
     shell.add_argument(
         "--agentic",
         action="store_true",
@@ -489,6 +506,7 @@ def _print_shell_memory(session: ShellSession) -> None:
     print("Session memory:")
     print(f"- Active ticker: {session.active_ticker or 'none'}")
     print(f"- Model: {session.active_model_provider}/{session.active_model_name}")
+    print(f"- Display mode: {session.display_mode}")
     print(f"- Latest decision: {session.latest_decision or 'none'}")
     print(f"- Latest what changed: {session.latest_what_changed or 'none'}")
     if session.conversation_context:
@@ -503,6 +521,7 @@ def _handle_shell_meta_command(tokens: list[str], session: ShellSession, run_sto
         print("/rules")
         print("/clear")
         print("/memory")
+        print("/mode [default|verbose|debug]")
         print("/history [TICKER] [limit]")
         print("/quit")
         return True
@@ -545,6 +564,16 @@ def _handle_shell_meta_command(tokens: list[str], session: ShellSession, run_sto
         if len(tokens) >= 3:
             session.active_model_name = tokens[2]
         print(f"Model set to: {session.active_model_provider}/{session.active_model_name}")
+        return True
+    if command == "/mode":
+        if len(tokens) == 1:
+            print(f"Current display mode: {session.display_mode}")
+            return True
+        if tokens[1] not in {"default", "verbose", "debug"}:
+            print("Usage: /mode [default|verbose|debug]")
+            return True
+        session.display_mode = tokens[1]
+        print(f"Display mode set to: {session.display_mode}")
         return True
     return False
 
@@ -596,6 +625,96 @@ def _update_shell_session_from_outputs(session: ShellSession, result: Investigat
         session.latest_what_changed = synth.payload.get("memo_sections", {}).get("what_changed")
 
 
+def _shell_verbose(session: ShellSession) -> bool:
+    return session.display_mode in {"verbose", "debug"}
+
+
+def _render_shell_chat_result(result: ChatResult, session: ShellSession, decision: ShellIntentDecision) -> None:
+    if session.display_mode == "debug":
+        print(f"[debug] intent={decision.intent} ticker={decision.ticker} refresh={decision.needs_refresh}")
+    print(result.answer)
+    if result.next_action and session.display_mode in {"verbose", "debug"}:
+        print(f"Next action: {result.next_action}")
+
+
+def _render_shell_investigation_result(
+    result: InvestigationResult,
+    session: ShellSession,
+    decision: ShellIntentDecision,
+) -> None:
+    if session.display_mode == "debug":
+        print(f"[debug] intent={decision.intent} ticker={decision.ticker} refresh={decision.needs_refresh}")
+    _render_investigation_result(result, verbose=_shell_verbose(session))
+
+
+def _classify_shell_input(raw: str, session: ShellSession, run_store: LocalRunStore) -> ShellIntentDecision:
+    tickers = _extract_tickers(raw)
+    lowered = raw.lower()
+
+    if _wants_compare(raw):
+        if len(tickers) >= 2:
+            return ShellIntentDecision(
+                intent="compare_stocks",
+                compare_tickers=tickers[:2],
+                original_input=raw,
+            )
+        if session.active_ticker and len(tickers) == 1:
+            return ShellIntentDecision(
+                intent="compare_stocks",
+                compare_tickers=[session.active_ticker, tickers[0]],
+                original_input=raw,
+            )
+        return ShellIntentDecision(
+            intent="clarifying_question",
+            clarification="Comparison needs two tickers. Example: compare NVDA and AMD.",
+            original_input=raw,
+        )
+
+    ticker = tickers[0] if tickers else session.active_ticker
+    if _wants_history(raw):
+        if ticker is None:
+            return ShellIntentDecision(
+                intent="clarifying_question",
+                clarification="I need a ticker to show thesis history or what changed.",
+                original_input=raw,
+            )
+        return ShellIntentDecision(
+            intent="show_history_or_memory",
+            ticker=ticker,
+            original_input=raw,
+        )
+
+    if ticker is None:
+        return ShellIntentDecision(
+            intent="clarifying_question",
+            clarification="I need a ticker. Example: look into ASML for a 5 year hold.",
+            original_input=raw,
+        )
+
+    prior_outputs = run_store.load_latest_outputs(ticker)
+    needs_refresh = _needs_refresh(raw)
+    if needs_refresh:
+        return ShellIntentDecision(
+            intent="refresh_current_view",
+            ticker=ticker,
+            needs_refresh=True,
+            original_input=raw,
+        )
+
+    if _wants_investigation(lowered, prior_outputs):
+        return ShellIntentDecision(
+            intent="investigate_stock",
+            ticker=ticker,
+            original_input=raw,
+        )
+
+    return ShellIntentDecision(
+        intent="general_research_question",
+        ticker=ticker,
+        original_input=raw,
+    )
+
+
 def _build_shell_args(base_args, ticker: str, *, query: str | None = None, refresh: bool = False):
     shell_args = argparse.Namespace(**vars(base_args))
     shell_args.ticker = ticker
@@ -611,33 +730,24 @@ def _build_shell_args(base_args, ticker: str, *, query: str | None = None, refre
 
 
 def _handle_shell_natural_language(raw: str, session: ShellSession, base_args, run_store: LocalRunStore) -> None:
-    tickers = _extract_tickers(raw)
-    ticker = tickers[0] if tickers else session.active_ticker
+    decision = _classify_shell_input(raw, session, run_store)
 
-    if _wants_compare(raw):
-        if len(tickers) < 2:
-            print("Comparison needs two tickers. Example: compare NVDA and AMD.")
-            return
+    if decision.intent == "clarifying_question":
+        print(decision.clarification)
+        return
+
+    if decision.intent == "compare_stocks":
         print("Comparison routing is planned but not implemented yet. Ask for one name at a time for now.")
         return
 
-    if _wants_history(raw):
-        if not ticker:
-            print("I need a ticker to show thesis history or what changed.")
-            return
-        _print_history(run_store, ticker, limit=5)
-        session.active_ticker = ticker
+    if decision.intent == "show_history_or_memory":
+        _print_history(run_store, decision.ticker, limit=5)
+        session.active_ticker = decision.ticker
         session.conversation_context.append(raw)
         return
 
-    if not ticker:
-        print("I need a ticker. Example: look into ASML for a 5 year hold.")
-        return
-
-    prior_outputs = run_store.load_latest_outputs(ticker)
-
-    if _needs_refresh(raw):
-        investigate_args = _build_shell_args(base_args, ticker, query=f"Investigate {ticker}")
+    if decision.intent == "refresh_current_view":
+        investigate_args = _build_shell_args(base_args, decision.ticker, query=f"Investigate {decision.ticker}")
         try:
             result = _execute_investigation(investigate_args)
         except (ConnectorError, LLMError) as exc:
@@ -646,12 +756,12 @@ def _handle_shell_natural_language(raw: str, session: ShellSession, base_args, r
             return
         _update_shell_session_from_outputs(session, result)
         session.conversation_context.append(raw)
-        print(f"Refreshing {ticker} with current data.")
-        _render_investigation_result(result, verbose=False)
+        print(f"Refreshing {decision.ticker} with current data.")
+        _render_shell_investigation_result(result, session, decision)
         return
 
-    if _wants_investigation(raw, prior_outputs):
-        investigate_args = _build_shell_args(base_args, ticker, query=raw)
+    if decision.intent == "investigate_stock":
+        investigate_args = _build_shell_args(base_args, decision.ticker, query=raw)
         try:
             result = _execute_investigation(investigate_args)
         except (ConnectorError, LLMError) as exc:
@@ -660,21 +770,19 @@ def _handle_shell_natural_language(raw: str, session: ShellSession, base_args, r
             return
         _update_shell_session_from_outputs(session, result)
         session.conversation_context.append(raw)
-        _render_investigation_result(result, verbose=False)
+        _render_shell_investigation_result(result, session, decision)
         return
 
-    chat_args = _build_shell_args(base_args, ticker, query=raw, refresh=False)
+    chat_args = _build_shell_args(base_args, decision.ticker, query=raw, refresh=False)
     try:
         result = _execute_chat(chat_args)
     except (ConnectorError, LLMError) as exc:
         label = "LLM error" if isinstance(exc, LLMError) else "Connector error"
         print(f"{label}: {exc}")
         return
-    session.active_ticker = ticker
+    session.active_ticker = decision.ticker
     session.conversation_context.append(raw)
-    print(result.answer)
-    if result.next_action:
-        print(f"Next action: {result.next_action}")
+    _render_shell_chat_result(result, session, decision)
 
 
 def _handle_benchmark(args) -> int:
@@ -691,6 +799,7 @@ def _handle_shell(args) -> int:
     session = ShellSession(
         active_model_provider=args.llm_provider,
         active_model_name=args.llm_model,
+        display_mode=args.display_mode,
     )
     run_store = LocalRunStore(args.store_dir)
     print("Templeton shell")
