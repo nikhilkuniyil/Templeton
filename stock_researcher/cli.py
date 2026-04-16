@@ -556,22 +556,94 @@ def _print_shell_memory(session: ShellSession, workspace_store: WorkspaceStore) 
         print(f"- Recent context: {session.conversation_context[-1]}")
 
 
+def _shell_data_summary(args) -> str:
+    tavily_enabled = getattr(args, "tavily", False) or bool(os.getenv("TAVILY_API_KEY"))
+    if getattr(args, "demo", False):
+        return "demo dataset"
+    if getattr(args, "financial_datasets", False):
+        news = "Tavily + Yahoo news" if tavily_enabled else "Yahoo news"
+        return f"Financial Datasets + SEC filings + {news}"
+    if getattr(args, "live_filings", False):
+        news = "Tavily + Yahoo news" if tavily_enabled else "Yahoo news"
+        return f"SEC filings + SEC company facts + {news}"
+    return "workspace/history only"
+
+
+def _shell_session_summary(args, session: ShellSession) -> list[str]:
+    llm_status = (
+        f"{session.active_model_provider}/{session.active_model_name}"
+        if getattr(args, "llm", False)
+        else "off"
+    )
+    workflow = "agentic manager loop" if getattr(args, "agentic", False) else "deterministic pipeline"
+    return [
+        f"- Data: {_shell_data_summary(args)}",
+        f"- LLM: {llm_status}",
+        f"- Workflow: {workflow}",
+        f"- Store: {args.store_dir}",
+        f"- Display: {session.display_mode}",
+    ]
+
+
+def _shell_example_lines() -> list[str]:
+    return [
+        "- look into ASML for a 5 year hold",
+        "- why was this rated watch?",
+        "- add this to my semis watchlist",
+        "- save a note that I only want to buy on a pullback",
+        "- what changed since last time?",
+        "- what am I missing before buying more into semis?",
+    ]
+
+
+def _print_shell_welcome(args, session: ShellSession) -> None:
+    print("Templeton shell")
+    print("Investor research terminal")
+    print()
+    print("Session:")
+    for line in _shell_session_summary(args, session):
+        print(line)
+    print()
+    print("Ask naturally:")
+    for line in _shell_example_lines():
+        print(line)
+    print()
+    print("Controls:")
+    print("- /help /memory /history /model /mode /rules /clear /quit")
+    if _shell_data_summary(args) == "workspace/history only":
+        print("- Launch with --financial-datasets or --demo for source-backed fresh research.")
+
+
 def _handle_shell_meta_command(
     tokens: list[str],
     session: ShellSession,
     run_store: LocalRunStore,
     workspace_store: WorkspaceStore,
+    args,
 ) -> bool:
     command = tokens[0]
     if command == "/help":
-        print("Natural language handles research tasks.")
-        print("/model [provider] [model]")
-        print("/rules")
-        print("/clear")
-        print("/memory")
-        print("/mode [default|verbose|debug]")
-        print("/history [TICKER] [limit]")
-        print("/quit")
+        print("Templeton help")
+        print("- Research and workspace tasks use natural language.")
+        print("- Templeton keeps the active ticker and workspace context in session.")
+        print("- Refresh or latest-sensitive questions should use current data sources.")
+        print()
+        print("Examples:")
+        for line in _shell_example_lines():
+            print(line)
+        print()
+        print("Controls:")
+        print("- /model [provider] [model]")
+        print("- /rules")
+        print("- /clear")
+        print("- /memory")
+        print("- /mode [default|verbose|debug]")
+        print("- /history [TICKER] [limit]")
+        print("- /quit")
+        print()
+        print("Current session:")
+        for line in _shell_session_summary(args, session):
+            print(line)
         return True
     if command == "/rules":
         print(_shell_rules_text())
@@ -1199,9 +1271,7 @@ def _handle_shell(args) -> int:
     )
     run_store = LocalRunStore(args.store_dir)
     workspace_store = WorkspaceStore(args.store_dir)
-    print("Templeton shell")
-    print("Use natural language for research. Slash commands are for session control.")
-    print("Commands: /model, /rules, /clear, /memory, /history, /help, /quit")
+    _print_shell_welcome(args, session)
     while True:
         prompt = f"templeton[{session.active_ticker or '-'}]> "
         try:
@@ -1228,7 +1298,7 @@ def _handle_shell(args) -> int:
 
         command = tokens[0]
         if raw.startswith("/"):
-            if not _handle_shell_meta_command(tokens, session, run_store, workspace_store):
+            if not _handle_shell_meta_command(tokens, session, run_store, workspace_store, args):
                 print(f"Unknown command: {command}")
             continue
         _handle_shell_natural_language(raw, session, args, run_store, workspace_store)

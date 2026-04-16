@@ -67,6 +67,8 @@ def test_cli_shell_supports_investigate_chat_and_history(monkeypatch, capsys, tm
     captured = capsys.readouterr()
     assert exit_code == 0
     assert "Templeton shell" in captured.out
+    assert "Investor research terminal" in captured.out
+    assert "Ask naturally:" in captured.out
     assert "Session memory:" in captured.out
     assert "Investigation: ASML" in captured.out or "Investigation (agentic): ASML" in captured.out
     assert "Prior research leans WATCH" in captured.out
@@ -115,6 +117,7 @@ def test_cli_defaults_to_shell_when_no_command_is_given(monkeypatch, capsys, tmp
     captured = capsys.readouterr()
     assert exit_code == 0
     assert "Templeton shell" in captured.out
+    assert "- Data: demo dataset" in captured.out
 
 
 def test_cli_shell_supports_workspace_flows(monkeypatch, capsys, tmp_path) -> None:
@@ -142,3 +145,22 @@ def test_cli_shell_supports_workspace_flows(monkeypatch, capsys, tmp_path) -> No
     assert "Added semis as a priority theme for new capital." in captured.out
     assert "Main blockers before buying more into semis:" in captured.out
     assert "Priority themes: semis" in captured.out
+
+
+def test_cli_shell_help_matches_natural_language_session(monkeypatch, capsys, tmp_path) -> None:
+    commands = iter(
+        [
+            "/help",
+            "/quit",
+        ]
+    )
+    monkeypatch.setattr("builtins.input", lambda _: next(commands))
+
+    exit_code = main(["shell", "--demo", "--store-dir", str(tmp_path)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Templeton help" in captured.out
+    assert "Research and workspace tasks use natural language." in captured.out
+    assert "/mode [default|verbose|debug]" in captured.out
+    assert "Current session:" in captured.out
