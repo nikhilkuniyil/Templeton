@@ -12,10 +12,19 @@ stateDiagram-v2
     SessionReset --> Idle: session cleared
 
     IntentRouting --> ClarifyingQuestion: ticker or intent ambiguous
+    IntentRouting --> WorkspaceLookup: watchlist, portfolio, note, or monitoring request
     IntentRouting --> MemoryLookup: context may answer request
     IntentRouting --> FreshDataRetrieval: latest/current request or explicit refresh
 
     ClarifyingQuestion --> IntentRouting: user clarifies
+
+    WorkspaceLookup --> WorkspaceUpdate: add, remove, save, organize
+    WorkspaceLookup --> PortfolioAnalysis: allocation, ranking, exposure question
+    WorkspaceLookup --> MemoryLookup: research retrieval with workspace context
+    WorkspaceLookup --> ErrorRecovery: workspace state unavailable
+
+    WorkspaceUpdate --> ResponseRendering: workspace updated
+    PortfolioAnalysis --> ResponseRendering: workspace answer ready
 
     MemoryLookup --> ResponseRendering: saved context sufficient
     MemoryLookup --> FreshDataRetrieval: context stale or insufficient

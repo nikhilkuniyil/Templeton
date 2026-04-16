@@ -1,0 +1,301 @@
+{
+  "spec_id": "templeton_investor_workspace_v1",
+  "updated_on": "2026-04-16",
+  "goal": "Turn Templeton into a capital-allocation workspace where research, notes, watchlists, portfolio context, and monitoring live together.",
+  "product_position": {
+    "primary_job_to_be_done": "Help the user decide where new money should go, how much conviction exists, and what still needs to be learned before buying.",
+    "secondary_jobs": [
+      "Preserve high-quality research context across time",
+      "Organize ideas by industry, theme, or portfolio role",
+      "Make thesis changes and missing work visible",
+      "Keep a decision journal rather than scattered notes"
+    ],
+    "anti_goals": [
+      "Do not reduce the product to one-off ticker answers with no durable organization.",
+      "Do not treat the user's own notes as separate from the research record.",
+      "Do not let watchlists become flat ticker lists with no ranking, rationale, or next steps."
+    ]
+  },
+  "core_objects": [
+    {
+      "object": "watchlist",
+      "description": "A durable collection of tickers grouped by industry, theme, strategy, or decision stage.",
+      "required_fields": [
+        "watchlist_id",
+        "name",
+        "description",
+        "tags",
+        "tickers",
+        "ranking_method",
+        "updated_at"
+      ],
+      "important_metadata": [
+        "industry_focus",
+        "capital_priority",
+        "desired_exposure_change",
+        "notes"
+      ]
+    },
+    {
+      "object": "portfolio",
+      "description": "A durable record of current holdings, target exposure, overlap, and room for new capital.",
+      "required_fields": [
+        "portfolio_id",
+        "name",
+        "positions",
+        "cash_available",
+        "bucket_targets",
+        "risk_limits",
+        "updated_at"
+      ],
+      "important_metadata": [
+        "industry_targets",
+        "max_position_size",
+        "max_theme_concentration",
+        "notes"
+      ]
+    },
+    {
+      "object": "ticker_dossier",
+      "description": "A long-lived per-company record combining generated research and user-authored thinking.",
+      "required_fields": [
+        "ticker",
+        "latest_decision",
+        "latest_confidence",
+        "latest_memo_run_id",
+        "thesis_status",
+        "key_risks",
+        "monitoring_items",
+        "open_questions",
+        "updated_at"
+      ],
+      "important_metadata": [
+        "industry",
+        "thesis_summary",
+        "valuation_view",
+        "what_changed",
+        "user_notes"
+      ]
+    },
+    {
+      "object": "research_note",
+      "description": "A timestamped user note linked to a ticker, watchlist, portfolio, or theme.",
+      "required_fields": [
+        "note_id",
+        "scope_type",
+        "scope_id",
+        "body",
+        "created_at"
+      ],
+      "important_metadata": [
+        "author",
+        "tags",
+        "conviction_delta",
+        "linked_run_ids"
+      ]
+    },
+    {
+      "object": "monitoring_item",
+      "description": "A trigger, event, or condition that should be re-checked before or after capital moves.",
+      "required_fields": [
+        "monitoring_item_id",
+        "scope_type",
+        "scope_id",
+        "monitor_type",
+        "condition",
+        "status",
+        "created_at"
+      ],
+      "important_metadata": [
+        "priority",
+        "due_date",
+        "linked_tickers",
+        "why_it_matters"
+      ]
+    },
+    {
+      "object": "capital_allocation_queue",
+      "description": "A ranked list of ideas competing for new money.",
+      "required_fields": [
+        "queue_id",
+        "candidate_entries",
+        "ranking_logic",
+        "updated_at"
+      ],
+      "important_metadata": [
+        "available_capital",
+        "portfolio_constraints",
+        "industry_preferences",
+        "decision_notes"
+      ]
+    }
+  ],
+  "key_workflows": [
+    {
+      "workflow": "watchlist_management",
+      "examples": [
+        "add ASML to my semis watchlist",
+        "show my semis watchlist",
+        "remove AMD from my cyclical names list"
+      ],
+      "expected_behavior": [
+        "Create missing watchlists when the user clearly requests it.",
+        "Store the reason a ticker was added whenever possible.",
+        "Show ranked or grouped watchlist views, not just flat ticker dumps."
+      ]
+    },
+    {
+      "workflow": "portfolio_context_review",
+      "examples": [
+        "what industries am I underweight in",
+        "where should new money go in my portfolio",
+        "am I too concentrated in semis"
+      ],
+      "expected_behavior": [
+        "Use current portfolio buckets and user preferences when available.",
+        "Separate portfolio-capacity questions from pure single-stock analysis.",
+        "Be explicit when missing holdings or sizing data limits the answer."
+      ]
+    },
+    {
+      "workflow": "candidate_prioritization",
+      "examples": [
+        "rank my semis watchlist by readiness",
+        "which names are closest to buy-ready",
+        "what is blocking conviction on these names"
+      ],
+      "expected_behavior": [
+        "Rank candidates by readiness, conviction, valuation, and open-question burden.",
+        "Show why a name is high or low priority.",
+        "Surface what work remains before capital should be deployed."
+      ]
+    },
+    {
+      "workflow": "note_and_thesis_capture",
+      "examples": [
+        "save a note that I only want to buy ASML on a pullback",
+        "log that my conviction in NVDA increased after earnings",
+        "record that I need to study customer concentration before buying"
+      ],
+      "expected_behavior": [
+        "Store user-authored notes as durable first-class records.",
+        "Link notes to tickers, watchlists, or portfolios.",
+        "Allow notes to influence future what-changed and readiness views."
+      ]
+    },
+    {
+      "workflow": "monitoring_and_recheck",
+      "examples": [
+        "what should I monitor before buying more into semis",
+        "show unresolved risks across my watchlist",
+        "which held names need a fresh review"
+      ],
+      "expected_behavior": [
+        "Aggregate monitoring items by ticker, watchlist, and portfolio.",
+        "Distinguish thesis-breakers from routine check-ins.",
+        "Prioritize unresolved or high-severity items."
+      ]
+    }
+  ],
+  "derived_views": [
+    {
+      "view": "watchlist_board",
+      "columns": [
+        "ticker",
+        "latest_decision",
+        "confidence",
+        "readiness_status",
+        "what_changed",
+        "top_reason",
+        "open_questions_count"
+      ]
+    },
+    {
+      "view": "portfolio_exposure_view",
+      "columns": [
+        "bucket",
+        "current_weight",
+        "target_weight",
+        "gap",
+        "top_candidates",
+        "constraint_notes"
+      ]
+    },
+    {
+      "view": "capital_queue_view",
+      "columns": [
+        "rank",
+        "ticker",
+        "watchlist",
+        "readiness_score",
+        "valuation_view",
+        "conviction_note",
+        "main_blocker"
+      ]
+    },
+    {
+      "view": "monitoring_queue_view",
+      "columns": [
+        "scope",
+        "item",
+        "priority",
+        "status",
+        "why_it_matters",
+        "next_review_date"
+      ]
+    }
+  ],
+  "helpful_ideas": [
+    {
+      "idea": "readiness_score",
+      "description": "A simple status like incomplete, building, or ready that reflects whether enough work exists to commit capital."
+    },
+    {
+      "idea": "disconfirming_evidence_log",
+      "description": "A dedicated place to record reasons not to buy so the notebook does not become one-sided."
+    },
+    {
+      "idea": "capital_bucket_targets",
+      "description": "Industry or theme exposure targets so Templeton can answer where incremental dollars should go."
+    },
+    {
+      "idea": "open_questions_queue",
+      "description": "A ranked list of unresolved research questions that still block conviction."
+    },
+    {
+      "idea": "decision_journal",
+      "description": "A record of why the user bought, passed, or waited, useful for later review and learning."
+    },
+    {
+      "idea": "entry_condition_notes",
+      "description": "User-defined conditions like valuation pullbacks, risk resolution, or event triggers required before buying."
+    }
+  ],
+  "prototype_scope": {
+    "phase_1": [
+      "one local watchlist store",
+      "one local portfolio store",
+      "ticker dossier creation on investigate",
+      "natural-language watchlist add/list flows",
+      "user note capture for a ticker"
+    ],
+    "phase_2": [
+      "watchlist ranking by readiness and conviction",
+      "portfolio exposure gaps",
+      "monitoring queue",
+      "capital allocation queue"
+    ],
+    "phase_3": [
+      "cross-watchlist ranking",
+      "portfolio overlap and sizing guidance",
+      "earnings and event-driven monitoring",
+      "decision journal summaries"
+    ]
+  },
+  "acceptance_criteria": [
+    "The user can organize names by theme or industry without leaving Templeton.",
+    "The user can store notes and open questions tied to a ticker or watchlist.",
+    "Templeton can explain what is blocking confidence before capital is committed.",
+    "The system can show where new money should go using both research quality and portfolio context."
+  ]
+}

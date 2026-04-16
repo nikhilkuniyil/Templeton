@@ -1,14 +1,15 @@
 {
   "spec_id": "templeton_terminal_experience_v1",
-  "updated_on": "2026-04-15",
-  "goal": "Define a terminal interaction model that feels like a research assistant, not a bundle of narrow commands.",
+  "updated_on": "2026-04-16",
+  "goal": "Define a terminal interaction model that feels like an investor workspace, not a bundle of narrow commands.",
   "design_position": {
     "default_mode": "natural_language",
     "philosophy": "Users should mostly type research requests in plain language. Explicit slash commands should be reserved for session and environment control.",
     "anti_goals": [
       "Do not add a new slash command for every research workflow.",
       "Do not force users to remember implementation-specific verbs like investigate, refresh, or compare when natural language can express the same intent.",
-      "Do not let the shell UX drift independently from the research and memory architecture."
+      "Do not let the shell UX drift independently from the research and memory architecture.",
+      "Do not treat watchlists, portfolio thinking, and user notes as external to the product."
     ]
   },
   "interaction_model": {
@@ -33,14 +34,19 @@
           "what changed since last time",
           "compare NVDA and AMD",
           "refresh this with the latest data",
-          "what are the main risks here"
+          "what are the main risks here",
+          "add ASML to my semis watchlist",
+          "show my semiconductor watchlist",
+          "what am I missing before buying more into semis",
+          "save a note that I only want to buy on a pullback"
         ]
       }
     ],
     "routing_expectations": [
       "The shell should classify input into a small set of research intents rather than relying on many explicit commands.",
       "The active ticker should be used when the user omits one and the context is unambiguous.",
-      "When the user request is ambiguous, Templeton should ask a short follow-up instead of guessing."
+      "When the user request is ambiguous, Templeton should ask a short follow-up instead of guessing.",
+      "Watchlist and portfolio requests should feel like natural language operations over durable workspace objects."
     ]
   },
   "minimal_meta_commands": [
@@ -75,11 +81,16 @@
     "/refresh",
     "/compare",
     "/whatchanged",
-    "/watchlist"
+    "/watchlist",
+    "/portfolio",
+    "/notes",
+    "/monitoring"
   ],
   "session_state": {
     "required_fields": [
       "active_ticker",
+      "active_watchlist",
+      "active_portfolio",
       "active_model_provider",
       "active_model_name",
       "conversation_context",
@@ -90,6 +101,9 @@
     "future_fields": [
       "watchlist_context",
       "portfolio_context",
+      "capital_budget_context",
+      "open_question_context",
+      "note_draft",
       "preferred_time_horizon",
       "risk_tolerance"
     ]
@@ -121,8 +135,20 @@
         "purpose": "Load saved runs, thesis diffs, and session memory before deciding whether fresh data is needed."
       },
       {
+        "state": "workspace_lookup",
+        "purpose": "Load watchlists, portfolio context, ticker dossiers, and notes before executing workspace-aware requests."
+      },
+      {
         "state": "fresh_data_retrieval",
         "purpose": "Fetch live filings, structured data, prices, and news when the request requires freshness."
+      },
+      {
+        "state": "workspace_update",
+        "purpose": "Create or modify watchlists, notes, portfolio records, or monitoring items."
+      },
+      {
+        "state": "portfolio_analysis",
+        "purpose": "Answer allocation, exposure, ranking, or capacity questions using portfolio and watchlist context."
       },
       {
         "state": "research_execution",
@@ -192,6 +218,11 @@
       },
       {
         "from": "intent_routing",
+        "to": "workspace_lookup",
+        "condition": "request references watchlists, portfolio context, notes, or monitoring"
+      },
+      {
+        "from": "intent_routing",
         "to": "memory_lookup",
         "condition": "request can be answered partly or fully from saved context"
       },
@@ -204,6 +235,31 @@
         "from": "clarifying_question",
         "to": "intent_routing",
         "condition": "user provides clarification"
+      },
+      {
+        "from": "workspace_lookup",
+        "to": "workspace_update",
+        "condition": "request modifies watchlists, notes, portfolio state, or monitoring items"
+      },
+      {
+        "from": "workspace_lookup",
+        "to": "portfolio_analysis",
+        "condition": "request asks for allocation, ranking, or industry exposure reasoning"
+      },
+      {
+        "from": "workspace_lookup",
+        "to": "memory_lookup",
+        "condition": "request is primarily research retrieval with workspace context"
+      },
+      {
+        "from": "workspace_update",
+        "to": "response_rendering",
+        "condition": "workspace mutation succeeds"
+      },
+      {
+        "from": "portfolio_analysis",
+        "to": "response_rendering",
+        "condition": "portfolio or watchlist answer is ready"
       },
       {
         "from": "memory_lookup",
@@ -236,6 +292,11 @@
         "condition": "connector or retrieval failure occurs"
       },
       {
+        "from": "workspace_lookup",
+        "to": "error_recovery",
+        "condition": "workspace state is missing, corrupt, or unavailable"
+      },
+      {
         "from": "research_execution",
         "to": "error_recovery",
         "condition": "agent execution or orchestration failure occurs"
@@ -259,6 +320,7 @@
     "invariants": [
       "Every natural-language request must pass through intent_routing before execution.",
       "Fresh-data requests must not be answered purely from memory.",
+      "Workspace-modifying requests must update durable workspace state rather than only the transient session.",
       "Default mode should not expose raw agent internals unless the user requests verbose or debug output.",
       "Session reset must not delete durable run history."
     ]
@@ -269,6 +331,10 @@
       "explain_current_view",
       "refresh_current_view",
       "compare_stocks",
+      "manage_watchlist",
+      "portfolio_allocation_question",
+      "capture_research_note",
+      "show_monitoring_queue",
       "show_history_or_memory",
       "general_research_question"
     ],
@@ -276,20 +342,50 @@
       "If the user asks for the latest or current view, route through fresh data retrieval.",
       "If the user asks what changed, prefer memory/history before launching a full refresh.",
       "If the user asks to compare two or more names, build a comparison request instead of two isolated investigations.",
-      "If the user asks a follow-up about the active ticker, reuse current session context unless freshness is required."
+      "If the user asks a follow-up about the active ticker, reuse current session context unless freshness is required.",
+      "If the user asks to add, remove, rank, or organize tickers, route through durable watchlist or portfolio objects rather than treating it as chat.",
+      "If the user asks where new capital should go, include watchlist, portfolio, and note context in the answer."
     ],
     "failure_behavior": [
       "If ticker resolution is ambiguous, ask for the ticker explicitly.",
       "If evidence is stale or missing, state that and offer a refresh path.",
+      "If the user references a watchlist or portfolio object that does not exist, say so directly and offer to create it.",
       "If the request exceeds current system capability, say so directly instead of fabricating behavior."
     ]
   },
+  "workspace_objects": [
+    {
+      "object": "watchlist",
+      "purpose": "Organize candidates by theme, industry, or strategy."
+    },
+    {
+      "object": "portfolio",
+      "purpose": "Track current holdings, desired exposure, overlap, and room for new capital."
+    },
+    {
+      "object": "ticker_dossier",
+      "purpose": "Combine generated research, user notes, risks, valuation views, and monitoring items for one company."
+    },
+    {
+      "object": "research_note",
+      "purpose": "Store the user's own observations, questions, and conviction changes."
+    },
+    {
+      "object": "monitoring_item",
+      "purpose": "Track triggers, earnings events, valuation levels, and thesis-break conditions."
+    },
+    {
+      "object": "capital_allocation_queue",
+      "purpose": "Rank where incremental dollars should go based on readiness, conviction, and portfolio fit."
+    }
+  ],
   "terminal_response_contract": {
     "must_include": [
       "clear statement of what Templeton is doing",
       "research result or follow-up question",
       "evidence or freshness caveat when relevant",
-      "memory-aware explanation when prior runs exist"
+      "memory-aware explanation when prior runs exist",
+      "workspace-aware explanation when the answer changes watchlist, portfolio, note, or monitoring state"
     ],
     "should_avoid": [
       "dumping raw agent names unless the user is in an explicitly verbose or debug mode",
@@ -325,13 +421,18 @@
     },
     {
       "order": 6,
-      "item": "Only after the shell contract is stable, continue feature work on comparison, watchlists, and monitoring."
+      "item": "Implement durable watchlist, portfolio, note, and monitoring objects behind the shell."
+    },
+    {
+      "order": 7,
+      "item": "Only after the shell and workspace contract are stable, continue feature work on richer comparison and allocation workflows."
     }
   ],
   "acceptance_criteria": [
     "A first-time user can understand how to use the shell without memorizing research-specific commands.",
     "A returning user can ask 'what changed?' or 'refresh this' and get the right behavior from context.",
     "The shell exposes a strong product opinion without hiding evidence, memory, or freshness limitations.",
-    "New research workflows do not require new slash commands by default."
+    "New research workflows do not require new slash commands by default.",
+    "The user can manage watchlists, notes, and portfolio context without leaving the terminal workflow."
   ]
 }

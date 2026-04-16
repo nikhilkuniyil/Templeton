@@ -1,10 +1,11 @@
 {
   "plan_id": "templeton_permanent_solution_v1",
-  "updated_on": "2026-04-15",
+  "updated_on": "2026-04-16",
   "goal": "Build a CLI-first research operating system that matches Dexter on core agent capability and beats it on evidence quality, continuity, and investor usefulness.",
   "principles": [
     "Favor measurable quality improvements over feature count.",
     "Default to natural-language interaction and keep explicit commands limited to session control.",
+    "Optimize for persistent investor workflows, not just one-off research answers.",
     "Keep integration boundaries loose so Dexter-compatible ingestion can be added without coupling codebases.",
     "Require every final conclusion to be traceable to sources, intermediate outputs, and validation steps.",
     "Persist research artifacts so work compounds over time.",
@@ -38,6 +39,14 @@
     {
       "id": "research_memory",
       "description": "Ticker history, thesis drift, and what-changed comparisons are first-class workflows."
+    },
+    {
+      "id": "capital_allocation_workspace",
+      "description": "Watchlists, portfolio context, notes, and monitoring workflows help the user decide where new capital should go."
+    },
+    {
+      "id": "investor_notebook",
+      "description": "Templeton stores the user's own notes, open questions, disconfirming evidence, and conviction changes alongside generated research."
     }
   ],
   "architecture": {
@@ -53,13 +62,25 @@
         "connector bundle"
       ]
     },
+    "workspace_layer": {
+      "owner": "Templeton",
+      "components": [
+        "watchlists",
+        "portfolio registry",
+        "ticker dossiers",
+        "research notebook",
+        "monitoring queue",
+        "capital allocation queue"
+      ]
+    },
     "durability_layer": {
       "owner": "Templeton",
       "components": [
         "local run store",
         "scratchpad logger",
         "artifact history",
-        "memo history"
+        "memo history",
+        "workspace state store"
       ]
     },
     "quality_layer": {
@@ -97,6 +118,24 @@
         "Product decisions no longer require adding a new command for each research action.",
         "The shell can distinguish meta commands from natural-language research requests.",
         "Future CLI work is explicitly guided by a stable interaction spec."
+      ]
+    },
+    {
+      "phase_id": "phase_0b",
+      "name": "Investor Workspace Spec",
+      "status": "in_progress",
+      "objective": "Define watchlists, portfolio context, notes, and monitoring as first-class objects before implementation sprawl resumes.",
+      "deliverables": [
+        "watchlist data model",
+        "portfolio data model",
+        "ticker dossier and notebook model",
+        "monitoring queue model",
+        "capital allocation workflow spec"
+      ],
+      "completion_criteria": [
+        "The product has durable objects for watchlists, portfolio views, notes, and monitoring items.",
+        "Future shell work can route requests into investor-workspace workflows without inventing ad hoc state.",
+        "The workspace model supports both one-off research and multi-position capital allocation."
       ]
     },
     {
@@ -187,20 +226,41 @@
     },
     {
       "phase_id": "phase_6",
-      "name": "Research Memory And Monitoring",
+      "name": "Research Memory, Watchlists, And Monitoring",
       "status": "pending",
-      "objective": "Make research compound across time and positions.",
+      "objective": "Make research compound across time, watchlists, and held positions.",
       "deliverables": [
         "ticker-level memo history",
         "thesis drift detection",
         "watchlist state and alerts",
+        "portfolio exposure and overlap views",
+        "ticker notebooks and user notes",
         "earnings preview and post-event diff workflows",
         "portfolio concentration and overlap checks"
       ],
       "completion_criteria": [
         "A user can inspect how the thesis changed across runs.",
         "The system can explain why a stock moved from buy to watch or pass.",
+        "The user can organize tickers by theme, industry, or capital-allocation priority.",
         "Monitoring workflows surface meaningful changes instead of rerunning everything blindly."
+      ]
+    },
+    {
+      "phase_id": "phase_7",
+      "name": "Capital Allocation Workspace",
+      "status": "pending",
+      "objective": "Help the user decide where new money should go, not just how to analyze a single stock.",
+      "deliverables": [
+        "watchlist ranking and prioritization",
+        "portfolio bucket targets and capacity tracking",
+        "candidate comparison views for new capital",
+        "decision journal with user notes and thesis checkpoints",
+        "readiness and open-question tracking"
+      ],
+      "completion_criteria": [
+        "The user can ask which watchlist names deserve deeper work or new capital right now.",
+        "Templeton can explain portfolio and industry exposure gaps.",
+        "The system can distinguish ready-to-buy names from names that still need research."
       ]
     }
   ],
@@ -216,26 +276,30 @@
   "current_priority_queue": [
     {
       "rank": 1,
-      "item": "Finalize terminal UX spec and freeze command philosophy."
+      "item": "Finalize the investor workspace spec for watchlists, portfolio context, notes, and monitoring."
     },
     {
       "rank": 2,
-      "item": "Refactor shell around natural-language routing and minimal meta commands."
+      "item": "Extend the terminal shell contract to handle investor-workspace intents naturally."
     },
     {
       "rank": 3,
-      "item": "Build benchmark harness and golden-case dataset."
+      "item": "Implement the first working watchlist and portfolio prototype."
     },
     {
       "rank": 4,
-      "item": "Implement section-aware SEC parser."
+      "item": "Build benchmark harness and golden-case dataset."
     },
     {
       "rank": 5,
-      "item": "Strengthen verifier and repair behavior."
+      "item": "Implement section-aware SEC parser."
     },
     {
       "rank": 6,
+      "item": "Strengthen verifier and repair behavior."
+    },
+    {
+      "rank": 7,
       "item": "Upgrade memo schema with evidence references and change tracking."
     }
   ],
@@ -244,11 +308,12 @@
       "Templeton matches Dexter on dependable CLI research workflows and basic live-data coverage."
     ],
     "differentiation": [
-      "Templeton exceeds Dexter on evidence traceability, filing extraction quality, memo usefulness, and thesis continuity."
+      "Templeton exceeds Dexter on evidence traceability, filing extraction quality, memo usefulness, thesis continuity, and investor workflow durability."
     ],
     "proof": [
       "Benchmark results show consistent quality gains on the same question set.",
-      "Users can inspect why a conclusion was reached and what changed over time."
+      "Users can inspect why a conclusion was reached and what changed over time.",
+      "Users can organize ideas, portfolio context, and monitoring signals in one workspace rather than scattered notes and prompts."
     ]
   }
 }
