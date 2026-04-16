@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shlex
+import sys
 from dataclasses import dataclass, field
 from uuid import uuid4
 
@@ -203,6 +204,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = list(argv) if argv is not None else sys.argv[1:]
+    if not argv or argv[0].startswith("-"):
+        argv = ["shell", *argv]
     parser = build_parser()
     args = parser.parse_args(argv)
 

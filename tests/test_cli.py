@@ -106,6 +106,17 @@ def test_cli_shell_debug_mode_shows_routing(monkeypatch, capsys, tmp_path) -> No
     assert "[debug] intent=investigate_stock ticker=ASML refresh=False" in captured.out
 
 
+def test_cli_defaults_to_shell_when_no_command_is_given(monkeypatch, capsys, tmp_path) -> None:
+    commands = iter(["/quit"])
+    monkeypatch.setattr("builtins.input", lambda _: next(commands))
+
+    exit_code = main(["--demo", "--store-dir", str(tmp_path)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Templeton shell" in captured.out
+
+
 def test_cli_shell_supports_workspace_flows(monkeypatch, capsys, tmp_path) -> None:
     commands = iter(
         [
