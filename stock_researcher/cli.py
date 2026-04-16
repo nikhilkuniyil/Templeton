@@ -5,7 +5,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shlex
+from dataclasses import dataclass, field
 from uuid import uuid4
 
 from .agents import AgentRuntime
@@ -27,6 +29,37 @@ from .models import AgentEnvelope, ResearchRequest
 from .orchestrator import InvestigationOrchestrator
 from .research_manager import LLMResearchManager, ManagerLoop
 from .run_store import LocalRunStore
+
+
+@dataclass
+class InvestigationResult:
+    ticker: str
+    question: str
+    artifact_dir: str | None
+    outputs: dict[str, AgentEnvelope]
+    llm_memo: str | None = None
+    manager_steps: list[dict] = field(default_factory=list)
+    agents_run: list[str] = field(default_factory=list)
+
+
+@dataclass
+class ChatResult:
+    ticker: str
+    question: str
+    answer: str
+    next_action: str | None = None
+    used_llm: bool = False
+
+
+@dataclass
+class ShellSession:
+    active_ticker: str | None = None
+    active_model_provider: str = "openai"
+    active_model_name: str = "gpt-5.4-mini"
+    conversation_context: list[str] = field(default_factory=list)
+    latest_run_id: str | None = None
+    latest_decision: str | None = None
+    latest_what_changed: str | None = None
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -166,10 +199,38 @@ def main(argv: list[str] | None = None) -> int:
 
 def _handle_investigate(args) -> int:
     try:
-        connectors = _connector_bundle_from_args(args)
-    except ConnectorError as exc:
-        print(f"Connector error: {exc}")
+        result = _execute_investigation(args)
+    except (ConnectorError, LLMError) as exc:
+        label = "LLM error" if isinstance(exc, LLMError) else "Connector error"
+        print(f"{label}: {exc}")
         return 1
+
+    if args.json:
+        if result.llm_memo is not None:
+            print(
+                json.dumps(
+                    {
+                        "memo": result.llm_memo,
+                        "agents_run": result.agents_run,
+                        "plan_thought": result.manager_steps[0]["thought"] if result.manager_steps else "",
+                        "loop_steps": result.manager_steps,
+                    },
+                    indent=2,
+                )
+            )
+        else:
+            print(json.dumps(_run_to_dict(result.outputs), indent=2))
+        return 0
+
+    _render_investigation_result(result, verbose=True)
+    return 0
+
+
+def _execute_investigation(args) -> InvestigationResult:
+    try:
+        connectors = _connector_bundle_from_args(args)
+    except ConnectorError:
+        raise
     run_store = LocalRunStore(args.store_dir)
     runtime = AgentRuntime(run_store=run_store)
     ticker = args.ticker.upper()
@@ -184,39 +245,27 @@ def _handle_investigate(args) -> int:
 
     # ── Agentic loop path (--agentic implies --llm) ───────────────────────────
     if getattr(args, "agentic", False):
-        try:
-            manager = _llm_manager_from_args(args)
-        except ConnectorError as exc:
-            print(f"LLM setup error: {exc}")
-            return 1
+        manager = _llm_manager_from_args(args)
         loop = ManagerLoop(manager.llm_client)
 
         # Build source packets outside the orchestrator so the loop can use them.
         source_packets: dict = {}
         if connectors is not None:
-            try:
-                source_packets = {
-                    t: connectors.build_source_packet(t) for t in request.tickers
-                }
-            except ConnectorError as exc:
-                print(f"Connector error: {exc}")
-                return 1
+            source_packets = {
+                t: connectors.build_source_packet(t) for t in request.tickers
+            }
 
         run_dir = run_store.start_run(request, list(ManagerLoop._PIPELINE_ORDER))
         if source_packets:
             run_store.record_source_packets(run_dir, source_packets)
 
-        try:
-            result = loop.run(
-                request,
-                agent_executor=runtime.execute,
-                source_packets=source_packets,
-                run_dir=run_dir,
-                run_store=run_store,
-            )
-        except LLMError as exc:
-            print(f"LLM error: {exc}")
-            return 1
+        result = loop.run(
+            request,
+            agent_executor=runtime.execute,
+            source_packets=source_packets,
+            run_dir=run_dir,
+            run_store=run_store,
+        )
 
         # Persist the actual agent outputs so history / load_latest_outputs work.
         from .models import SourcePacket as _SP
@@ -227,69 +276,26 @@ def _handle_investigate(args) -> int:
             source_packets=source_packets or {ticker: _SP(ticker)},
             steps=result.agents_run,
         )
-
-        if args.json:
-            print(
-                json.dumps(
-                    {
-                        "memo": result.memo,
-                        "agents_run": result.agents_run,
-                        "plan_thought": result.plan_thought,
-                        "loop_steps": result.loop_steps,
-                    },
-                    indent=2,
-                )
-            )
-            return 0
-
-        print(f"Investigation (agentic): {ticker}")
-        print(f"Question: {request.user_query}")
-        print(f"Run artifacts: {run_dir}")
-        print(f"\nPlanning thought: {result.plan_thought}")
-        print(f"Agents run: {', '.join(result.agents_run)}")
-        _print_manager_steps(result.loop_steps)
-        print("\n[llm memo]")
-        print(result.memo)
-        return 0
+        return InvestigationResult(
+            ticker=ticker,
+            question=request.user_query,
+            artifact_dir=str(run_dir),
+            outputs=result.outputs,
+            llm_memo=result.memo,
+            manager_steps=result.loop_steps,
+            agents_run=result.agents_run,
+        )
 
     # ── Standard deterministic pipeline path ─────────────────────────────────
     orchestrator = InvestigationOrchestrator(connectors=connectors, run_store=run_store)
-    try:
-        run = orchestrator.run(request, agent_executor=runtime.execute)
-    except ConnectorError as exc:
-        print(f"Connector error: {exc}")
-        return 1
+    run = orchestrator.run(request, agent_executor=runtime.execute)
 
-    if args.json:
-        print(json.dumps(_run_to_dict(run.outputs), indent=2))
-        return 0
-
-    print(f"Investigation: {ticker}")
-    print(f"Question: {request.user_query}")
-    if run.artifact_dir is not None:
-        print(f"Run artifacts: {run.artifact_dir}")
-    for agent_name in run.steps:
-        output = run.outputs.get(agent_name)
-        if output is None:
-            continue
-        print(f"\n[{agent_name}]")
-        print(output.summary)
-        if agent_name == "synthesizer":
-            _print_synthesizer_sections(output)
-            continue
-        if output.key_points:
-            for point in output.key_points[:3]:
-                print(f"- {point}")
+    llm_memo: str | None = None
 
     if args.llm:
-        try:
-            manager = _llm_manager_from_args(args)
-            llm_response = manager.compose_investigation_response(request, run.outputs)
-        except (ConnectorError, LLMError) as exc:
-            print(f"\n[llm]\nLLM error: {exc}")
-            return 1
-        print("\n[llm]")
-        print(llm_response.text)
+        manager = _llm_manager_from_args(args)
+        llm_response = manager.compose_investigation_response(request, run.outputs)
+        llm_memo = llm_response.text
         if run.artifact_dir is not None:
             run_store.record_llm_memo(
                 run.artifact_dir,
@@ -297,16 +303,32 @@ def _handle_investigate(args) -> int:
                 model=llm_response.model,
                 provider=llm_response.provider,
             )
-    return 0
+    return InvestigationResult(
+        ticker=ticker,
+        question=request.user_query,
+        artifact_dir=str(run.artifact_dir) if run.artifact_dir is not None else None,
+        outputs=run.outputs,
+        llm_memo=llm_memo,
+        agents_run=run.steps,
+    )
 
 
 def _handle_chat(args) -> int:
-    ticker = args.ticker.upper()
     try:
-        connectors = _connector_bundle_from_args(args)
-    except ConnectorError as exc:
-        print(f"Connector error: {exc}")
+        result = _execute_chat(args)
+    except (ConnectorError, LLMError) as exc:
+        label = "LLM error" if isinstance(exc, LLMError) else "Connector error"
+        print(f"{label}: {exc}")
         return 1
+    print(result.answer)
+    if result.next_action:
+        print(f"Next action: {result.next_action}")
+    return 0
+
+
+def _execute_chat(args) -> ChatResult:
+    ticker = args.ticker.upper()
+    connectors = _connector_bundle_from_args(args)
     run_store = LocalRunStore(args.store_dir)
     runtime = AgentRuntime(run_store=run_store)
     orchestrator = InvestigationOrchestrator(connectors=connectors, run_store=run_store)
@@ -327,23 +349,14 @@ def _handle_chat(args) -> int:
             time_horizon="long_term",
             objective="long_term_compounding",
         )
-        try:
-            run = orchestrator.run(refresh_request, agent_executor=runtime.execute)
-        except ConnectorError as exc:
-            print(f"Connector error: {exc}")
-            return 1
+        run = orchestrator.run(refresh_request, agent_executor=runtime.execute)
         prior_research = run.outputs
         chat_run_dir = run.artifact_dir
 
     interface = ConversationalInterface()
     if args.llm and prior_research:
-        try:
-            manager = _llm_manager_from_args(args)
-            llm_response = manager.answer_chat_response(request, prior_research)
-        except (ConnectorError, LLMError) as exc:
-            print(f"LLM error: {exc}")
-            return 1
-        print(llm_response.text)
+        manager = _llm_manager_from_args(args)
+        llm_response = manager.answer_chat_response(request, prior_research)
         if chat_run_dir is not None:
             run_store.record_llm_chat(
                 chat_run_dir,
@@ -352,19 +365,72 @@ def _handle_chat(args) -> int:
                 model=llm_response.model,
                 provider=llm_response.provider,
             )
-        return 0
+        return ChatResult(
+            ticker=ticker,
+            question=args.question,
+            answer=llm_response.text,
+            used_llm=True,
+        )
 
     result = interface.respond(request, prior_research=prior_research)
-    print(result.answer)
-
     next_action = result.envelope.payload.get("recommended_next_action")
-    if next_action:
-        print(f"Next action: {next_action}")
-    return 0
+    return ChatResult(
+        ticker=ticker,
+        question=args.question,
+        answer=result.answer,
+        next_action=next_action,
+        used_llm=False,
+    )
 
 
 def _run_to_dict(outputs: dict[str, AgentEnvelope]) -> dict[str, dict]:
     return {name: envelope.to_dict() for name, envelope in outputs.items()}
+
+
+def _render_investigation_result(result: InvestigationResult, verbose: bool = True) -> None:
+    if result.llm_memo is not None and result.manager_steps:
+        print(f"Investigation (agentic): {result.ticker}")
+        print(f"Question: {result.question}")
+        if result.artifact_dir is not None:
+            print(f"Run artifacts: {result.artifact_dir}")
+        if result.manager_steps:
+            first_plan = next((step for step in result.manager_steps if step.get("step") == "plan"), None)
+            if first_plan is not None:
+                print(f"\nPlanning thought: {first_plan.get('thought', '')}")
+        print(f"Agents run: {', '.join(result.agents_run)}")
+        if verbose:
+            _print_manager_steps(result.manager_steps)
+        print("\n[llm memo]")
+        print(result.llm_memo)
+        return
+
+    print(f"Investigation: {result.ticker}")
+    print(f"Question: {result.question}")
+    if result.artifact_dir is not None:
+        print(f"Run artifacts: {result.artifact_dir}")
+    if not verbose:
+        synth = result.outputs.get("synthesizer")
+        if synth is not None:
+            print(synth.summary)
+            _print_synthesizer_sections(synth)
+        elif result.llm_memo:
+            print(result.llm_memo)
+        return
+    for agent_name in result.agents_run:
+        output = result.outputs.get(agent_name)
+        if output is None:
+            continue
+        print(f"\n[{agent_name}]")
+        print(output.summary)
+        if agent_name == "synthesizer":
+            _print_synthesizer_sections(output)
+            continue
+        if output.key_points:
+            for point in output.key_points[:3]:
+                print(f"- {point}")
+    if result.llm_memo:
+        print("\n[llm]")
+        print(result.llm_memo)
 
 
 def _print_manager_steps(loop_steps: list[dict]) -> None:
@@ -409,6 +475,208 @@ def _print_history(run_store: LocalRunStore, ticker: str, limit: int = 5) -> Non
         print(f"  {changed}")
 
 
+def _shell_rules_text() -> str:
+    return (
+        "Templeton rules:\n"
+        "- Use evidence-backed sources only.\n"
+        "- Refresh for current, latest, price, or news-sensitive questions.\n"
+        "- Say when evidence is stale, weak, or contradictory.\n"
+        "- Preserve research continuity through memory and what-changed diffs."
+    )
+
+
+def _print_shell_memory(session: ShellSession) -> None:
+    print("Session memory:")
+    print(f"- Active ticker: {session.active_ticker or 'none'}")
+    print(f"- Model: {session.active_model_provider}/{session.active_model_name}")
+    print(f"- Latest decision: {session.latest_decision or 'none'}")
+    print(f"- Latest what changed: {session.latest_what_changed or 'none'}")
+    if session.conversation_context:
+        print(f"- Recent context: {session.conversation_context[-1]}")
+
+
+def _handle_shell_meta_command(tokens: list[str], session: ShellSession, run_store: LocalRunStore) -> bool:
+    command = tokens[0]
+    if command == "/help":
+        print("Natural language handles research tasks.")
+        print("/model [provider] [model]")
+        print("/rules")
+        print("/clear")
+        print("/memory")
+        print("/history [TICKER] [limit]")
+        print("/quit")
+        return True
+    if command == "/rules":
+        print(_shell_rules_text())
+        return True
+    if command == "/clear":
+        session.active_ticker = None
+        session.conversation_context.clear()
+        session.latest_run_id = None
+        session.latest_decision = None
+        session.latest_what_changed = None
+        print("Session context cleared.")
+        return True
+    if command == "/memory":
+        _print_shell_memory(session)
+        return True
+    if command == "/history":
+        ticker = session.active_ticker
+        limit = 5
+        if len(tokens) >= 2:
+            maybe_limit = tokens[-1]
+            if maybe_limit.isdigit():
+                limit = int(maybe_limit)
+                if len(tokens) >= 3:
+                    ticker = tokens[1].upper()
+            else:
+                ticker = tokens[1].upper()
+        if not ticker:
+            print("No active ticker. Ask about a ticker first or pass one explicitly.")
+            return True
+        _print_history(run_store, ticker, limit=limit)
+        return True
+    if command == "/model":
+        if len(tokens) == 1:
+            print(f"Current model: {session.active_model_provider}/{session.active_model_name}")
+            return True
+        if len(tokens) >= 2:
+            session.active_model_provider = tokens[1]
+        if len(tokens) >= 3:
+            session.active_model_name = tokens[2]
+        print(f"Model set to: {session.active_model_provider}/{session.active_model_name}")
+        return True
+    return False
+
+
+def _extract_tickers(text: str) -> list[str]:
+    found = re.findall(r"\b[A-Z]{1,5}\b", text)
+    candidates: list[str] = []
+    for token in found:
+        if token.lower() in {
+            "llm",
+        }:
+            continue
+        if token not in candidates:
+            candidates.append(token)
+    return candidates
+
+
+def _needs_refresh(text: str) -> bool:
+    lowered = text.lower()
+    return any(term in lowered for term in ("refresh", "latest", "current", "today", "news", "price", "right now"))
+
+
+def _wants_history(text: str) -> bool:
+    lowered = text.lower()
+    return "what changed" in lowered or "since last" in lowered or "history" in lowered
+
+
+def _wants_compare(text: str) -> bool:
+    lowered = text.lower()
+    return "compare" in lowered or "versus" in lowered or " vs " in lowered
+
+
+def _wants_investigation(text: str, prior_outputs: dict[str, AgentEnvelope]) -> bool:
+    lowered = text.lower()
+    if any(term in lowered for term in ("investigate", "look into", "analyze", "research", "worth buying", "should i buy")):
+        return True
+    return not prior_outputs
+
+
+def _update_shell_session_from_outputs(session: ShellSession, result: InvestigationResult) -> None:
+    session.active_ticker = result.ticker
+    if result.artifact_dir is not None:
+        session.latest_run_id = result.artifact_dir.rsplit("/", 1)[-1]
+    decision = result.outputs.get("decision_portfolio_fit")
+    if decision is not None:
+        session.latest_decision = decision.payload.get("decision")
+    synth = result.outputs.get("synthesizer")
+    if synth is not None:
+        session.latest_what_changed = synth.payload.get("memo_sections", {}).get("what_changed")
+
+
+def _build_shell_args(base_args, ticker: str, *, query: str | None = None, refresh: bool = False):
+    shell_args = argparse.Namespace(**vars(base_args))
+    shell_args.ticker = ticker
+    shell_args.query = query
+    shell_args.question = query
+    shell_args.refresh = refresh
+    shell_args.time_horizon = "long_term"
+    shell_args.objective = "long_term_compounding"
+    shell_args.json = False
+    shell_args.llm_provider = getattr(base_args, "llm_provider", "openai")
+    shell_args.llm_model = getattr(base_args, "llm_model", "gpt-5.4-mini")
+    return shell_args
+
+
+def _handle_shell_natural_language(raw: str, session: ShellSession, base_args, run_store: LocalRunStore) -> None:
+    tickers = _extract_tickers(raw)
+    ticker = tickers[0] if tickers else session.active_ticker
+
+    if _wants_compare(raw):
+        if len(tickers) < 2:
+            print("Comparison needs two tickers. Example: compare NVDA and AMD.")
+            return
+        print("Comparison routing is planned but not implemented yet. Ask for one name at a time for now.")
+        return
+
+    if _wants_history(raw):
+        if not ticker:
+            print("I need a ticker to show thesis history or what changed.")
+            return
+        _print_history(run_store, ticker, limit=5)
+        session.active_ticker = ticker
+        session.conversation_context.append(raw)
+        return
+
+    if not ticker:
+        print("I need a ticker. Example: look into ASML for a 5 year hold.")
+        return
+
+    prior_outputs = run_store.load_latest_outputs(ticker)
+
+    if _needs_refresh(raw):
+        investigate_args = _build_shell_args(base_args, ticker, query=f"Investigate {ticker}")
+        try:
+            result = _execute_investigation(investigate_args)
+        except (ConnectorError, LLMError) as exc:
+            label = "LLM error" if isinstance(exc, LLMError) else "Connector error"
+            print(f"{label}: {exc}")
+            return
+        _update_shell_session_from_outputs(session, result)
+        session.conversation_context.append(raw)
+        print(f"Refreshing {ticker} with current data.")
+        _render_investigation_result(result, verbose=False)
+        return
+
+    if _wants_investigation(raw, prior_outputs):
+        investigate_args = _build_shell_args(base_args, ticker, query=raw)
+        try:
+            result = _execute_investigation(investigate_args)
+        except (ConnectorError, LLMError) as exc:
+            label = "LLM error" if isinstance(exc, LLMError) else "Connector error"
+            print(f"{label}: {exc}")
+            return
+        _update_shell_session_from_outputs(session, result)
+        session.conversation_context.append(raw)
+        _render_investigation_result(result, verbose=False)
+        return
+
+    chat_args = _build_shell_args(base_args, ticker, query=raw, refresh=False)
+    try:
+        result = _execute_chat(chat_args)
+    except (ConnectorError, LLMError) as exc:
+        label = "LLM error" if isinstance(exc, LLMError) else "Connector error"
+        print(f"{label}: {exc}")
+        return
+    session.active_ticker = ticker
+    session.conversation_context.append(raw)
+    print(result.answer)
+    if result.next_action:
+        print(f"Next action: {result.next_action}")
+
+
 def _handle_benchmark(args) -> int:
     harness = BenchmarkHarness(run_store=LocalRunStore(args.store_dir))
     result = harness.run_suite(args.suite)
@@ -420,12 +688,16 @@ def _handle_benchmark(args) -> int:
 
 
 def _handle_shell(args) -> int:
+    session = ShellSession(
+        active_model_provider=args.llm_provider,
+        active_model_name=args.llm_model,
+    )
     run_store = LocalRunStore(args.store_dir)
-    active_ticker: str | None = None
     print("Templeton shell")
-    print("Commands: /use TICKER, /investigate [TICKER] [query], /chat [TICKER] question, /refresh [TICKER], /history [TICKER] [limit], /help, /quit")
+    print("Use natural language for research. Slash commands are for session control.")
+    print("Commands: /model, /rules, /clear, /memory, /history, /help, /quit")
     while True:
-        prompt = f"templeton[{active_ticker or '-'}]> "
+        prompt = f"templeton[{session.active_ticker or '-'}]> "
         try:
             raw = input(prompt).strip()
         except EOFError:
@@ -439,15 +711,6 @@ def _handle_shell(args) -> int:
             continue
         if raw in {"/quit", "/exit"}:
             return 0
-        if raw == "/help":
-            print("Free-form text asks a chat question about the active ticker.")
-            print("/use TICKER")
-            print("/investigate [TICKER] [optional query]")
-            print("/chat [TICKER] question")
-            print("/refresh [TICKER]")
-            print("/history [TICKER] [limit]")
-            print("/quit")
-            continue
 
         try:
             tokens = shlex.split(raw)
@@ -458,106 +721,11 @@ def _handle_shell(args) -> int:
             continue
 
         command = tokens[0]
-        if command == "/use":
-            if len(tokens) < 2:
-                print("Usage: /use TICKER")
-                continue
-            active_ticker = tokens[1].upper()
-            print(f"Active ticker: {active_ticker}")
-            continue
-
-        if command == "/history":
-            ticker = active_ticker
-            limit = 5
-            if len(tokens) >= 2:
-                maybe_limit = tokens[-1]
-                if maybe_limit.isdigit():
-                    limit = int(maybe_limit)
-                    if len(tokens) >= 3:
-                        ticker = tokens[1].upper()
-                else:
-                    ticker = tokens[1].upper()
-            if not ticker:
-                print("No active ticker. Use /use TICKER or pass one explicitly.")
-                continue
-            _print_history(run_store, ticker, limit=limit)
-            continue
-
-        if command == "/investigate":
-            ticker = active_ticker
-            query = None
-            if len(tokens) >= 2:
-                if tokens[1].isalnum() and len(tokens[1]) <= 10:
-                    ticker = tokens[1].upper()
-                    query = " ".join(tokens[2:]) or None
-                else:
-                    query = " ".join(tokens[1:]) or None
-            if not ticker:
-                print("No active ticker. Use /use TICKER or pass a ticker to /investigate.")
-                continue
-            active_ticker = ticker
-            investigate_args = argparse.Namespace(**vars(args))
-            investigate_args.command = "investigate"
-            investigate_args.ticker = ticker
-            investigate_args.query = query
-            investigate_args.time_horizon = "long_term"
-            investigate_args.objective = "long_term_compounding"
-            investigate_args.json = False
-            _handle_investigate(investigate_args)
-            continue
-
-        if command == "/refresh":
-            ticker = active_ticker
-            if len(tokens) >= 2:
-                ticker = tokens[1].upper()
-            if not ticker:
-                print("No active ticker. Use /use TICKER or pass a ticker to /refresh.")
-                continue
-            active_ticker = ticker
-            refresh_args = argparse.Namespace(**vars(args))
-            refresh_args.command = "investigate"
-            refresh_args.ticker = ticker
-            refresh_args.query = f"Investigate {ticker}"
-            refresh_args.time_horizon = "long_term"
-            refresh_args.objective = "long_term_compounding"
-            refresh_args.json = False
-            _handle_investigate(refresh_args)
-            continue
-
-        if command == "/chat":
-            ticker = active_ticker
-            question_tokens = tokens[1:]
-            if len(tokens) >= 3 and tokens[1].isalnum() and len(tokens[1]) <= 10:
-                ticker = tokens[1].upper()
-                question_tokens = tokens[2:]
-            if not ticker:
-                print("No active ticker. Use /use TICKER or pass a ticker to /chat.")
-                continue
-            if not question_tokens:
-                print("Usage: /chat [TICKER] question")
-                continue
-            active_ticker = ticker
-            chat_args = argparse.Namespace(**vars(args))
-            chat_args.command = "chat"
-            chat_args.ticker = ticker
-            chat_args.question = " ".join(question_tokens)
-            chat_args.refresh = False
-            _handle_chat(chat_args)
-            continue
-
         if raw.startswith("/"):
-            print(f"Unknown command: {command}")
+            if not _handle_shell_meta_command(tokens, session, run_store):
+                print(f"Unknown command: {command}")
             continue
-
-        if not active_ticker:
-            print("No active ticker. Use /use TICKER or start with /investigate TICKER.")
-            continue
-        chat_args = argparse.Namespace(**vars(args))
-        chat_args.command = "chat"
-        chat_args.ticker = active_ticker
-        chat_args.question = raw
-        chat_args.refresh = False
-        _handle_chat(chat_args)
+        _handle_shell_natural_language(raw, session, args, run_store)
 
 
 def _connector_bundle_from_args(args) -> ConnectorBundle | None:

@@ -51,10 +51,12 @@ def test_cli_benchmark_outputs_summary(capsys, tmp_path) -> None:
 def test_cli_shell_supports_investigate_chat_and_history(monkeypatch, capsys, tmp_path) -> None:
     commands = iter(
         [
-            "/use ASML",
-            "/investigate",
+            "/memory",
+            "look into ASML for a 5 year hold",
             "Why was this rated watch?",
             "/history",
+            "/clear",
+            "/memory",
             "/quit",
         ]
     )
@@ -65,7 +67,8 @@ def test_cli_shell_supports_investigate_chat_and_history(monkeypatch, capsys, tm
     captured = capsys.readouterr()
     assert exit_code == 0
     assert "Templeton shell" in captured.out
-    assert "Active ticker: ASML" in captured.out
+    assert "Session memory:" in captured.out
     assert "Investigation: ASML" in captured.out or "Investigation (agentic): ASML" in captured.out
     assert "Prior research leans WATCH" in captured.out
     assert "History: ASML" in captured.out
+    assert "Session context cleared." in captured.out
