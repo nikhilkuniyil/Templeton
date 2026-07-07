@@ -54,6 +54,7 @@ templeton chat ASML "Why was this rated watch?" --demo --refresh
 templeton rank ASML NVDA --demo
 templeton signal ASML NVDA --demo
 templeton backtest ASML NVDA --demo --top-n 2
+templeton simulate --top-n 2 --cost-bps 10
 templeton benchmark
 templeton shell --demo
 ```
@@ -155,6 +156,31 @@ Historical price flow:
 
 This is intentionally a lightweight research sanity check, not a full point-in-time backtester. It is useful for comparing factor definitions, seeing whether ranking output is measurable, and keeping qualitative research tied to portfolio-level metrics such as return, volatility, Sharpe, drawdown, and hit rate.
 
+## Point-In-Time Simulation
+
+`simulate` is the quant-trader-oriented path. It reads dated factor snapshots from CSV, ranks names at each rebalance date, forms an equal-weight top-N basket, applies transaction costs from turnover, and reports the equity-curve metrics.
+
+```bash
+templeton simulate --universe data/demo_signal_history.csv --top-n 2 --cost-bps 10
+```
+
+CSV columns:
+
+```text
+date,ticker,sector,quality,value,momentum,risk,catalyst,forward_return
+```
+
+Outputs include:
+
+- gross and net period returns
+- cumulative and annualized return
+- volatility, Sharpe, max drawdown, and hit rate
+- average turnover and total transaction cost
+- trade events with buy/sell weight changes
+- average factor exposure and score contribution by factor bucket
+
+This is still compact by design, but it has the core controls a quant trading discussion usually needs: point-in-time inputs, next-period returns, turnover, costs, position changes, and attribution.
+
 ## LLM Memos
 
 The deterministic agent pipeline does not require an LLM. Add `--llm` when you want a provider model to rewrite the final memo or answer a chat question from saved research.
@@ -182,6 +208,7 @@ The `--agentic` flag uses an LLM manager loop to choose and run agents before fi
 - `stock_researcher/` contains the CLI, agents, connectors, orchestration, workspace store, and LLM adapters.
 - `schemas/` contains the JSON-schema-like contracts used by runtime validation.
 - `benchmarks/templeton_cases.json` defines the local benchmark suite.
+- `data/demo_signal_history.csv` is a small point-in-time factor dataset for `simulate`.
 - `tests/` covers the CLI, orchestration, connectors, benchmarks, conversation flow, and workspace features.
 - `.templeton/` is local run/workspace state and is intentionally ignored by git.
 

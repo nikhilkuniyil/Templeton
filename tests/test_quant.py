@@ -57,6 +57,31 @@ def test_signal_json_exposes_diagnostics_and_sizing(capsys, tmp_path) -> None:
     assert signal["invalidation_triggers"]
 
 
+def test_cli_simulate_outputs_point_in_time_metrics(capsys) -> None:
+    exit_code = main(["simulate", "--top-n", "2", "--cost-bps", "10"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Point-in-time signal simulation" in captured.out
+    assert "Average turnover:" in captured.out
+    assert "Factor exposure:" in captured.out
+    assert "Trade events:" in captured.out
+
+
+def test_simulate_json_includes_trades_and_attribution(capsys) -> None:
+    exit_code = main(["simulate", "--top-n", "2", "--cost-bps", "10", "--json"])
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert exit_code == 0
+    assert payload["periods"] == 6
+    assert payload["trades"]
+    assert payload["period_results"]
+    assert payload["average_turnover"] > 0
+    assert "momentum" in payload["factor_exposure"]
+    assert "quality" in payload["score_contribution"]
+
+
 def test_backtest_json_uses_top_ranked_return_series(capsys, tmp_path) -> None:
     exit_code = main(
         [

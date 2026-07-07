@@ -34,10 +34,13 @@ from .quant import (
     BacktestResult,
     RankResult,
     SignalResult,
+    SimulationResult,
     backtest_top_ranked,
     generate_signal,
+    load_simulation_rows,
     rank_scores,
     score_research,
+    simulate_rebalance,
 )
 from .research_manager import LLMResearchManager, ManagerLoop
 from .run_store import LocalRunStore
@@ -234,6 +237,16 @@ def build_parser() -> argparse.ArgumentParser:
     signal.add_argument("--json", action="store_true", help="Print raw JSON output")
     _add_data_source_args(signal)
 
+    simulate = subparsers.add_parser("simulate", help="Run a point-in-time signal simulation from CSV")
+    simulate.add_argument(
+        "--universe",
+        default="data/demo_signal_history.csv",
+        help="CSV with date,ticker,factor columns and forward_return",
+    )
+    simulate.add_argument("--top-n", type=int, default=3, help="Number of top-ranked names to hold")
+    simulate.add_argument("--cost-bps", type=float, default=10.0, help="Transaction cost in basis points")
+    simulate.add_argument("--json", action="store_true", help="Print raw JSON output")
+
     shell = subparsers.add_parser("shell", help="Launch an interactive Templeton terminal")
     shell.add_argument("--llm", action="store_true", help="Use an LLM for upgraded memos and chat")
     shell.add_argument(
@@ -299,6 +312,8 @@ def main(argv: list[str] | None = None) -> int:
         return _handle_backtest(args)
     if args.command == "signal":
         return _handle_signal(args)
+    if args.command == "simulate":
+        return _handle_simulate(args)
     if args.command == "shell":
         return _handle_shell(args)
     parser.error(f"Unknown command: {args.command}")
@@ -1423,6 +1438,20 @@ def _handle_signal(args) -> int:
     return 0
 
 
+def _handle_simulate(args) -> int:
+    try:
+        rows = load_simulation_rows(args.universe)
+        result = simulate_rebalance(rows, top_n=args.top_n, cost_bps=args.cost_bps)
+    except (OSError, KeyError, ValueError) as exc:
+        print(f"Simulation error: {exc}")
+        return 1
+    if args.json:
+        print(json.dumps(result.to_dict(), indent=2))
+        return 0
+    _render_simulation_result(result)
+    return 0
+
+
 def _execute_quant_research(
     args,
     include_backtest: bool = False,
@@ -1508,6 +1537,33 @@ def _render_signal_results(results: list[SignalResult]) -> None:
         print("Invalidation triggers:")
         for trigger in result.invalidation_triggers:
             print(f"- {trigger}")
+
+
+def _render_simulation_result(result: SimulationResult) -> None:
+    print("Point-in-time signal simulation")
+    print(f"Strategy: {result.strategy}")
+    print(f"Periods: {result.periods}")
+    print(f"Cumulative return: {result.cumulative_return:.2%}")
+    print(f"Annualized return: {result.annualized_return:.2%}")
+    print(f"Volatility: {result.volatility:.2%}")
+    print(f"Sharpe: {result.sharpe:.3f}")
+    print(f"Max drawdown: {result.max_drawdown:.2%}")
+    print(f"Hit rate: {result.hit_rate:.1%}")
+    print(f"Average turnover: {result.average_turnover:.1%}")
+    print(f"Total transaction cost: {result.total_transaction_cost:.2%}")
+    print("Factor exposure:")
+    for name, value in result.factor_exposure.items():
+        print(f"- {name}: {value:.1f}")
+    print("Score contribution:")
+    for name, value in result.score_contribution.items():
+        print(f"- {name}: {value:.1%}")
+    print("Recent periods:")
+    for period in result.period_results[-5:]:
+        print(
+            f"- {period.date}: holdings={','.join(period.holdings)} "
+            f"net={period.net_return:.2%} turnover={period.turnover:.1%}"
+        )
+    print(f"Trade events: {len(result.trades)}")
 
 
 def _handle_shell(args) -> int:

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import csv
 import math
 from dataclasses import asdict, dataclass
+from pathlib import Path
 
 from .models import AgentEnvelope, SourcePacket
 
@@ -69,6 +71,79 @@ class SignalResult:
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+@dataclass(slots=True)
+class SimulationRow:
+    date: str
+    ticker: str
+    forward_return: float
+    quality: float
+    value: float
+    momentum: float
+    risk: float
+    catalyst: float
+    sector: str = "unknown"
+
+
+@dataclass(slots=True)
+class SimulationPeriod:
+    date: str
+    holdings: list[str]
+    gross_return: float
+    transaction_cost: float
+    net_return: float
+    turnover: float
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class TradeEvent:
+    date: str
+    ticker: str
+    action: str
+    weight_change: float
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class SimulationResult:
+    strategy: str
+    periods: int
+    cumulative_return: float
+    annualized_return: float
+    volatility: float
+    sharpe: float
+    max_drawdown: float
+    hit_rate: float
+    average_turnover: float
+    total_transaction_cost: float
+    factor_exposure: dict[str, float]
+    score_contribution: dict[str, float]
+    period_results: list[SimulationPeriod]
+    trades: list[TradeEvent]
+
+    def to_dict(self) -> dict:
+        return {
+            "strategy": self.strategy,
+            "periods": self.periods,
+            "cumulative_return": self.cumulative_return,
+            "annualized_return": self.annualized_return,
+            "volatility": self.volatility,
+            "sharpe": self.sharpe,
+            "max_drawdown": self.max_drawdown,
+            "hit_rate": self.hit_rate,
+            "average_turnover": self.average_turnover,
+            "total_transaction_cost": self.total_transaction_cost,
+            "factor_exposure": self.factor_exposure,
+            "score_contribution": self.score_contribution,
+            "period_results": [item.to_dict() for item in self.period_results],
+            "trades": [item.to_dict() for item in self.trades],
+        }
 
 
 def score_research(
@@ -178,6 +253,104 @@ def generate_signal(score: FactorScore) -> SignalResult:
         reasons=_signal_reasons(score, diagnostics),
         invalidation_triggers=_invalidation_triggers(score, diagnostics),
         diagnostics=diagnostics,
+    )
+
+
+def load_simulation_rows(path: str | Path) -> list[SimulationRow]:
+    rows: list[SimulationRow] = []
+    with Path(path).open("r", encoding="utf-8", newline="") as handle:
+        for raw in csv.DictReader(handle):
+            rows.append(
+                SimulationRow(
+                    date=str(raw["date"]),
+                    ticker=str(raw["ticker"]).upper(),
+                    forward_return=float(raw["forward_return"]),
+                    quality=float(raw["quality"]),
+                    value=float(raw["value"]),
+                    momentum=float(raw["momentum"]),
+                    risk=float(raw["risk"]),
+                    catalyst=float(raw["catalyst"]),
+                    sector=str(raw.get("sector") or "unknown"),
+                )
+            )
+    return rows
+
+
+def simulate_rebalance(
+    rows: list[SimulationRow],
+    top_n: int = 5,
+    cost_bps: float = 10.0,
+) -> SimulationResult:
+    by_date: dict[str, list[SimulationRow]] = {}
+    for row in rows:
+        by_date.setdefault(row.date, []).append(row)
+
+    current_weights: dict[str, float] = {}
+    period_results: list[SimulationPeriod] = []
+    trades: list[TradeEvent] = []
+    exposure_totals = {"quality": 0.0, "value": 0.0, "momentum": 0.0, "risk": 0.0, "catalyst": 0.0}
+    score_totals = {"quality": 0.0, "value": 0.0, "momentum": 0.0, "risk": 0.0, "catalyst": 0.0}
+
+    for date in sorted(by_date):
+        candidates = sorted(by_date[date], key=_simulation_score, reverse=True)
+        selected = [row for row in candidates if row.risk >= 50][: max(1, top_n)]
+        target_weight = 1 / len(selected) if selected else 0.0
+        target_weights = {row.ticker: target_weight for row in selected}
+        turnover = sum(
+            abs(target_weights.get(ticker, 0.0) - current_weights.get(ticker, 0.0))
+            for ticker in set(target_weights) | set(current_weights)
+        )
+        cost = turnover * cost_bps / 10000
+        gross_return = sum(target_weights[row.ticker] * row.forward_return for row in selected)
+        net_return = gross_return - cost
+        trades.extend(_trade_events(date, current_weights, target_weights))
+        period_results.append(
+            SimulationPeriod(
+                date=date,
+                holdings=[row.ticker for row in selected],
+                gross_return=round(gross_return, 4),
+                transaction_cost=round(cost, 4),
+                net_return=round(net_return, 4),
+                turnover=round(turnover, 4),
+            )
+        )
+        for row in selected:
+            exposure_totals["quality"] += row.quality
+            exposure_totals["value"] += row.value
+            exposure_totals["momentum"] += row.momentum
+            exposure_totals["risk"] += row.risk
+            exposure_totals["catalyst"] += row.catalyst
+            score_totals["quality"] += row.quality * 0.30
+            score_totals["value"] += row.value * 0.20
+            score_totals["momentum"] += row.momentum * 0.20
+            score_totals["risk"] += row.risk * 0.20
+            score_totals["catalyst"] += row.catalyst * 0.10
+        current_weights = target_weights
+
+    returns = [item.net_return for item in period_results]
+    cumulative = _compound(returns) if returns else 0.0
+    annualized = (1 + cumulative) ** (12 / len(returns)) - 1 if returns else 0.0
+    volatility = _stdev(returns) * math.sqrt(12) if returns else 0.0
+    sharpe = annualized / volatility if volatility else 0.0
+    selected_count = sum(len(item.holdings) for item in period_results)
+
+    return SimulationResult(
+        strategy=f"point_in_time_top_{top_n}_monthly_cost_{cost_bps:g}bps",
+        periods=len(period_results),
+        cumulative_return=round(cumulative, 4),
+        annualized_return=round(annualized, 4),
+        volatility=round(volatility, 4),
+        sharpe=round(sharpe, 3),
+        max_drawdown=round(_max_drawdown(returns), 4) if returns else 0.0,
+        hit_rate=round(sum(1 for item in returns if item > 0) / len(returns), 3) if returns else 0.0,
+        average_turnover=round(
+            sum(item.turnover for item in period_results) / len(period_results), 4
+        ) if period_results else 0.0,
+        total_transaction_cost=round(sum(item.transaction_cost for item in period_results), 4),
+        factor_exposure=_average_factor_map(exposure_totals, selected_count),
+        score_contribution=_score_contribution(score_totals),
+        period_results=period_results,
+        trades=trades,
     )
 
 
@@ -428,3 +601,48 @@ def _empty_backtest(tickers: list[str] | None = None) -> BacktestResult:
 
 def _clamp(value: float) -> float:
     return round(max(0.0, min(100.0, value)), 1)
+
+
+def _simulation_score(row: SimulationRow) -> float:
+    return (
+        row.quality * 0.30
+        + row.value * 0.20
+        + row.momentum * 0.20
+        + row.risk * 0.20
+        + row.catalyst * 0.10
+    )
+
+
+def _trade_events(
+    date: str,
+    current_weights: dict[str, float],
+    target_weights: dict[str, float],
+) -> list[TradeEvent]:
+    events: list[TradeEvent] = []
+    for ticker in sorted(set(current_weights) | set(target_weights)):
+        change = target_weights.get(ticker, 0.0) - current_weights.get(ticker, 0.0)
+        if abs(change) < 0.0001:
+            continue
+        action = "buy" if change > 0 else "sell"
+        events.append(
+            TradeEvent(
+                date=date,
+                ticker=ticker,
+                action=action,
+                weight_change=round(change, 4),
+            )
+        )
+    return events
+
+
+def _average_factor_map(totals: dict[str, float], count: int) -> dict[str, float]:
+    if count <= 0:
+        return {key: 0.0 for key in totals}
+    return {key: round(value / count, 1) for key, value in totals.items()}
+
+
+def _score_contribution(totals: dict[str, float]) -> dict[str, float]:
+    total = sum(totals.values())
+    if total <= 0:
+        return {key: 0.0 for key in totals}
+    return {key: round(value / total, 3) for key, value in totals.items()}
