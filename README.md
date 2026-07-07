@@ -1,8 +1,8 @@
 # Templeton Stock Researcher
 
-Templeton is a local command-line research assistant for public equities. It runs a fixed set of evidence-aware agents over filing, market, and news inputs, saves the output to disk, and lets you keep asking follow-up questions against the latest saved research.
+Templeton is a local command-line research and signal terminal for public equities. It combines evidence-aware company research, factor scoring, signal generation, historical return replay, and point-in-time portfolio simulation in one workflow.
 
-The project is intentionally small: no service, no database, and no background workers. It is useful as a local research workflow, a test bed for agent orchestration, or a starting point for plugging in better data providers.
+The project is designed to be inspectable end to end: source documents flow into typed agent outputs, agent outputs become factor scores, factor scores become signals, and dated factor snapshots can be simulated with turnover, transaction costs, trade logs, and attribution.
 
 ## What it does
 
@@ -10,11 +10,11 @@ The project is intentionally small: no service, no database, and no background w
 - Stores run artifacts and ticker history under `.templeton/` by default.
 - Supports a natural-language shell with session memory, watchlists, notes, and simple portfolio context.
 - Converts research outputs into transparent factor scores for cross-sectional ranking.
+- Generates research-backed entry signals with sizing bands, diagnostics, and invalidation triggers.
 - Replays top-ranked names as an equal-weight portfolio when market metadata includes monthly returns.
+- Simulates point-in-time factor snapshots with transaction costs, turnover, trade events, and attribution.
 - Works offline with built-in demo data for `ASML` and `NVDA`.
 - Can call live-ish data connectors for SEC filings/company facts, Yahoo Finance news/price chart data, Financial Datasets, Tavily search, and optional LLM memo generation.
-
-This is research support software, not investment advice. Treat outputs as a checklist and audit trail, not a trading signal.
 
 ## Quick Start
 
@@ -138,7 +138,7 @@ Signal labels:
 - `RISK_OFF`: risk or return regime is unfavorable.
 - `INSUFFICIENT_DATA`: source freshness or price history is not adequate.
 
-Each signal includes setup score, research stance, sizing band, return diagnostics, reasons, and invalidation triggers. The intent is to make the tradeability discussion explicit without turning the tool into an automated trading system.
+Each signal includes setup score, research stance, sizing band, return diagnostics, reasons, and invalidation triggers so the entry logic is explicit and auditable.
 
 `backtest` uses the same ranking and replays the top names as an equal-weight basket over `monthly_returns` from market-data metadata. Demo data ships with a small synthetic series; live SEC/Yahoo and Financial Datasets runs derive approximate monthly returns from daily closes.
 
@@ -154,7 +154,7 @@ Historical price flow:
 - `--financial-datasets` gets daily prices from Financial Datasets and uses the same return derivation.
 - `--demo` uses bundled synthetic returns so the ranking and replay workflow works offline.
 
-This is intentionally a lightweight research sanity check, not a full point-in-time backtester. It is useful for comparing factor definitions, seeing whether ranking output is measurable, and keeping qualitative research tied to portfolio-level metrics such as return, volatility, Sharpe, drawdown, and hit rate.
+This replay mode is useful for comparing factor definitions, checking whether ranking output is measurable, and keeping qualitative research tied to portfolio-level metrics such as return, volatility, Sharpe, drawdown, and hit rate.
 
 ## Point-In-Time Simulation
 
@@ -179,7 +179,7 @@ Outputs include:
 - trade events with buy/sell weight changes
 - average factor exposure and score contribution by factor bucket
 
-This is still compact by design, but it has the core controls a quant trading discussion usually needs: point-in-time inputs, next-period returns, turnover, costs, position changes, and attribution.
+This path provides the core controls for a quant trading discussion: point-in-time inputs, next-period returns, turnover, costs, position changes, and attribution.
 
 ## LLM Memos
 
@@ -230,10 +230,10 @@ templeton benchmark
 
 When adding a new agent output shape, update the matching schema in `schemas/` and add at least one focused test. The runtime validator is deliberately small and only implements the subset of JSON Schema this project uses.
 
-## Current Limits
+## Methodology Notes
 
-- Live data extraction is heuristic. SEC filing parsing aims to produce useful metadata, not a full filing analysis.
-- Yahoo and Tavily results are treated as catalyst context, not primary evidence.
-- Demo data is synthetic and only covers `ASML` and `NVDA`.
-- Backtests are single-snapshot replays unless you provide point-in-time historical metadata.
-- The project stores local JSON files rather than using a database, which keeps setup simple but is not designed for multi-user concurrency.
+- Research runs preserve source packets, agent outputs, final metadata, and optional LLM memos under `.templeton/`.
+- Ranking and signal commands use transparent factor weights rather than hidden model weights.
+- `backtest` uses the latest research-derived return metadata for quick ranking replay.
+- `simulate` uses dated factor rows and forward returns for point-in-time evaluation.
+- Local JSON storage keeps runs easy to inspect, diff, and reset during research iteration.
