@@ -257,6 +257,8 @@ def test_sec_companyfacts_market_data_client_derives_financial_metadata() -> Non
     assert metadata["technical_analysis"]["trend"] == "uptrend"
     assert metadata["technical_analysis"]["momentum"] == "positive"
     assert metadata["technical_analysis"]["entry_quality"] in {"constructive", "neutral", "extended"}
+    assert metadata["monthly_returns"]
+    assert any(item > 0 for item in metadata["monthly_returns"])
 
 
 def test_financial_datasets_market_data_client_derives_metadata() -> None:
@@ -307,6 +309,8 @@ def test_financial_datasets_market_data_client_derives_metadata() -> None:
     assert metadata["current_valuation"]["pe"] == 39.2
     assert metadata["current_valuation"]["market_cap"] == 2900000000000
     assert metadata["technical_analysis"]["entry_quality"] in {"constructive", "neutral", "extended"}
+    assert metadata["monthly_returns"]
+    assert any(item > 0 for item in metadata["monthly_returns"])
     assert metadata["data_provider"] == "financialdatasets"
 
 

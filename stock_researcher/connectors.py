@@ -324,6 +324,18 @@ class MarketDataDerivationMixin:
             return f"Monitor support near {round(support_levels[0], 2)} for pullback risk."
         return "Use recent support levels to manage entry risk."
 
+    def _monthly_returns_from_closes(self, closes: list[float], window: int = 21) -> list[float]:
+        """Approximate monthly returns from daily closes without adding date dependencies."""
+        returns: list[float] = []
+        if len(closes) <= window:
+            return returns
+        for index in range(window, len(closes), window):
+            previous = closes[index - window]
+            current = closes[index]
+            if previous > 0:
+                returns.append(round(current / previous - 1, 4))
+        return returns
+
 
 @dataclass(slots=True)
 class FilingExtractionMixin:
@@ -959,6 +971,7 @@ class SecCompanyFactsMarketDataClient(SecTickerResolver, MarketDataDerivationMix
             "scenario_ranges": {},
             "market_implied_expectations": [],
             "technical_analysis": technical_analysis,
+            "monthly_returns": self._monthly_returns_from_closes(closes),
         }
 
         company_name = str(company_facts.get("entityName", ticker.upper()))
@@ -1168,6 +1181,7 @@ class FinancialDatasetsMarketDataClient(MarketDataDerivationMixin):
                 earnings_growth=earnings_growth,
             ),
             "technical_analysis": self._technical_metadata(closes=closes, price=price),
+            "monthly_returns": self._monthly_returns_from_closes(closes),
             "data_provider": "financialdatasets",
         }
         retrieved_at = datetime.now(timezone.utc).isoformat()

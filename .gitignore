@@ -2,3 +2,13 @@
 __pycache__/
 *.pyc
 .templeton/
+.coverage
+.env
+.env.*
+!.env.example
+.mypy_cache/
+.ruff_cache/
+.venv/
+build/
+dist/
+*.egg-info/

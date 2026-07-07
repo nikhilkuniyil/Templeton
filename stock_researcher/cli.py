@@ -30,6 +30,7 @@ from .llm import LLMError, OpenAIResponsesClient
 from .llm import AnthropicMessagesClient, GeminiGenerateContentClient
 from .models import AgentEnvelope, ResearchRequest
 from .orchestrator import InvestigationOrchestrator
+from .quant import BacktestResult, RankResult, backtest_top_ranked, rank_scores, score_research
 from .research_manager import LLMResearchManager, ManagerLoop
 from .run_store import LocalRunStore
 from .workspace import WorkspaceStore
@@ -56,6 +57,12 @@ class ChatResult:
 
 
 @dataclass
+class QuantResearchResult:
+    rank_result: RankResult
+    backtest_result: BacktestResult | None = None
+
+
+@dataclass
 class ShellSession:
     active_ticker: str | None = None
     active_watchlist: str | None = None
@@ -78,6 +85,31 @@ class ShellIntentDecision:
     clarification: str | None = None
     original_input: str = ""
     payload: dict[str, object] = field(default_factory=dict)
+
+
+def _add_data_source_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--demo", action="store_true", help="Use built-in demo connector data")
+    parser.add_argument("--live-filings", action="store_true", help="Use live SEC filings with market/news connectors")
+    parser.add_argument(
+        "--financial-datasets",
+        action="store_true",
+        help="Use Financial Datasets as the primary structured-data backbone",
+    )
+    parser.add_argument(
+        "--tavily",
+        action="store_true",
+        help="Add Tavily web search as a qualitative news layer for live runs",
+    )
+    parser.add_argument(
+        "--store-dir",
+        default=".templeton",
+        help="Local directory for run artifacts and history",
+    )
+    parser.add_argument(
+        "--sec-user-agent",
+        default="TempletonResearch/0.1 (contact: local@example.com)",
+        help="User-Agent header for SEC requests",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -174,6 +206,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     benchmark.add_argument("--json", action="store_true", help="Print raw JSON output")
 
+    rank = subparsers.add_parser("rank", help="Rank tickers with simple factor scores")
+    rank.add_argument("tickers", nargs="+", help="Ticker symbols to rank")
+    rank.add_argument("--query", default=None, help="Optional research question")
+    rank.add_argument("--json", action="store_true", help="Print raw JSON output")
+    _add_data_source_args(rank)
+
+    backtest = subparsers.add_parser("backtest", help="Replay a top-ranked equal-weight portfolio")
+    backtest.add_argument("tickers", nargs="+", help="Ticker symbols to rank and test")
+    backtest.add_argument("--top-n", type=int, default=5, help="Number of top-ranked names to hold")
+    backtest.add_argument("--query", default=None, help="Optional research question")
+    backtest.add_argument("--json", action="store_true", help="Print raw JSON output")
+    _add_data_source_args(backtest)
+
     shell = subparsers.add_parser("shell", help="Launch an interactive Templeton terminal")
     shell.add_argument("--llm", action="store_true", help="Use an LLM for upgraded memos and chat")
     shell.add_argument(
@@ -233,6 +278,10 @@ def main(argv: list[str] | None = None) -> int:
         return _handle_chat(args)
     if args.command == "benchmark":
         return _handle_benchmark(args)
+    if args.command == "rank":
+        return _handle_rank(args)
+    if args.command == "backtest":
+        return _handle_backtest(args)
     if args.command == "shell":
         return _handle_shell(args)
     parser.error(f"Unknown command: {args.command}")
@@ -1307,6 +1356,95 @@ def _handle_benchmark(args) -> int:
         return 0
     print(format_suite_result(result))
     return 0
+
+
+def _handle_rank(args) -> int:
+    try:
+        result = _execute_quant_research(args)
+    except (ConnectorError, LLMError) as exc:
+        label = "LLM error" if isinstance(exc, LLMError) else "Connector error"
+        print(f"{label}: {exc}")
+        return 1
+    if args.json:
+        print(json.dumps(result.rank_result.to_dict(), indent=2))
+        return 0
+    _render_rank_result(result.rank_result)
+    return 0
+
+
+def _handle_backtest(args) -> int:
+    try:
+        result = _execute_quant_research(args, include_backtest=True)
+    except (ConnectorError, LLMError) as exc:
+        label = "LLM error" if isinstance(exc, LLMError) else "Connector error"
+        print(f"{label}: {exc}")
+        return 1
+    if args.json:
+        payload = {
+            "rank": result.rank_result.to_dict(),
+            "backtest": result.backtest_result.to_dict() if result.backtest_result else None,
+        }
+        print(json.dumps(payload, indent=2))
+        return 0
+    _render_rank_result(result.rank_result)
+    if result.backtest_result is not None:
+        _render_backtest_result(result.backtest_result)
+    return 0
+
+
+def _execute_quant_research(args, include_backtest: bool = False) -> QuantResearchResult:
+    connectors = _connector_bundle_from_args(args)
+    run_store = LocalRunStore(args.store_dir)
+    runtime = AgentRuntime(run_store=run_store)
+    orchestrator = InvestigationOrchestrator(connectors=connectors, run_store=run_store)
+    scores = []
+    for ticker in [item.upper() for item in args.tickers]:
+        request = ResearchRequest(
+            request_id=f"rank_{ticker.lower()}_{uuid4().hex[:8]}",
+            user_query=args.query or f"Rank {ticker} for long-term investment research",
+            mode="investigation",
+            tickers=[ticker],
+            time_horizon="long_term",
+            objective="factor_ranked_research",
+        )
+        run = orchestrator.run(request, agent_executor=runtime.execute)
+        source_packet = run.source_packets.get(ticker)
+        scores.append(score_research(ticker, run.outputs, source_packet=source_packet))
+    rank_result = rank_scores(scores)
+    backtest_result = backtest_top_ranked(rank_result, top_n=args.top_n) if include_backtest else None
+    return QuantResearchResult(rank_result=rank_result, backtest_result=backtest_result)
+
+
+def _render_rank_result(result: RankResult) -> None:
+    print("Factor ranking")
+    print("Ticker  Score  Quality  Value  Momentum  Risk  Catalyst  Decision  Freshness")
+    for row in result.rows:
+        print(
+            f"{row.ticker:<6} "
+            f"{row.total_score:>5.1f} "
+            f"{row.quality:>8.1f} "
+            f"{row.value:>6.1f} "
+            f"{row.momentum:>8.1f} "
+            f"{row.risk:>5.1f} "
+            f"{row.catalyst:>8.1f} "
+            f"{row.decision:<8} "
+            f"{row.evidence_freshness}"
+        )
+    print("Weights: quality 30%, value 20%, momentum 20%, risk 20%, catalyst 10%.")
+
+
+def _render_backtest_result(result: BacktestResult) -> None:
+    print()
+    print("Backtest replay")
+    print("Method: single research snapshot, top-ranked equal weight, monthly return metadata.")
+    print(f"Holdings: {', '.join(result.tickers) if result.tickers else 'none'}")
+    print(f"Periods: {result.periods}")
+    print(f"Cumulative return: {result.cumulative_return:.2%}")
+    print(f"Annualized return: {result.annualized_return:.2%}")
+    print(f"Volatility: {result.volatility:.2%}")
+    print(f"Sharpe: {result.sharpe:.3f}")
+    print(f"Max drawdown: {result.max_drawdown:.2%}")
+    print(f"Hit rate: {result.hit_rate:.1%}")
 
 
 def _handle_shell(args) -> int:
