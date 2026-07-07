@@ -26,6 +26,37 @@ def test_cli_backtest_demo_outputs_metrics(capsys, tmp_path) -> None:
     assert "Sharpe:" in captured.out
 
 
+def test_cli_signal_demo_outputs_research_signal(capsys, tmp_path) -> None:
+    exit_code = main(["signal", "ASML", "NVDA", "--demo", "--store-dir", str(tmp_path)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Research-backed signals" in captured.out
+    assert "ASML:" in captured.out
+    assert "Setup score:" in captured.out
+    assert "Invalidation triggers:" in captured.out
+
+
+def test_signal_json_exposes_diagnostics_and_sizing(capsys, tmp_path) -> None:
+    exit_code = main(["signal", "ASML", "--demo", "--json", "--store-dir", str(tmp_path)])
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    signal = payload["signals"][0]
+    assert exit_code == 0
+    assert signal["ticker"] == "ASML"
+    assert signal["signal"] in {
+        "BUY_ZONE",
+        "WATCH_FOR_PULLBACK",
+        "AVOID_CHASING",
+        "RISK_OFF",
+        "INSUFFICIENT_DATA",
+    }
+    assert "sizing" in signal
+    assert "trailing_3m_return" in signal["diagnostics"]
+    assert signal["invalidation_triggers"]
+
+
 def test_backtest_json_uses_top_ranked_return_series(capsys, tmp_path) -> None:
     exit_code = main(
         [

@@ -30,7 +30,15 @@ from .llm import LLMError, OpenAIResponsesClient
 from .llm import AnthropicMessagesClient, GeminiGenerateContentClient
 from .models import AgentEnvelope, ResearchRequest
 from .orchestrator import InvestigationOrchestrator
-from .quant import BacktestResult, RankResult, backtest_top_ranked, rank_scores, score_research
+from .quant import (
+    BacktestResult,
+    RankResult,
+    SignalResult,
+    backtest_top_ranked,
+    generate_signal,
+    rank_scores,
+    score_research,
+)
 from .research_manager import LLMResearchManager, ManagerLoop
 from .run_store import LocalRunStore
 from .workspace import WorkspaceStore
@@ -60,6 +68,7 @@ class ChatResult:
 class QuantResearchResult:
     rank_result: RankResult
     backtest_result: BacktestResult | None = None
+    signal_results: list[SignalResult] = field(default_factory=list)
 
 
 @dataclass
@@ -219,6 +228,12 @@ def build_parser() -> argparse.ArgumentParser:
     backtest.add_argument("--json", action="store_true", help="Print raw JSON output")
     _add_data_source_args(backtest)
 
+    signal = subparsers.add_parser("signal", help="Generate conservative research-backed entry signals")
+    signal.add_argument("tickers", nargs="+", help="Ticker symbols to signal")
+    signal.add_argument("--query", default=None, help="Optional research question")
+    signal.add_argument("--json", action="store_true", help="Print raw JSON output")
+    _add_data_source_args(signal)
+
     shell = subparsers.add_parser("shell", help="Launch an interactive Templeton terminal")
     shell.add_argument("--llm", action="store_true", help="Use an LLM for upgraded memos and chat")
     shell.add_argument(
@@ -282,6 +297,8 @@ def main(argv: list[str] | None = None) -> int:
         return _handle_rank(args)
     if args.command == "backtest":
         return _handle_backtest(args)
+    if args.command == "signal":
+        return _handle_signal(args)
     if args.command == "shell":
         return _handle_shell(args)
     parser.error(f"Unknown command: {args.command}")
@@ -1392,7 +1409,25 @@ def _handle_backtest(args) -> int:
     return 0
 
 
-def _execute_quant_research(args, include_backtest: bool = False) -> QuantResearchResult:
+def _handle_signal(args) -> int:
+    try:
+        result = _execute_quant_research(args, include_signals=True)
+    except (ConnectorError, LLMError) as exc:
+        label = "LLM error" if isinstance(exc, LLMError) else "Connector error"
+        print(f"{label}: {exc}")
+        return 1
+    if args.json:
+        print(json.dumps({"signals": [item.to_dict() for item in result.signal_results]}, indent=2))
+        return 0
+    _render_signal_results(result.signal_results)
+    return 0
+
+
+def _execute_quant_research(
+    args,
+    include_backtest: bool = False,
+    include_signals: bool = False,
+) -> QuantResearchResult:
     connectors = _connector_bundle_from_args(args)
     run_store = LocalRunStore(args.store_dir)
     runtime = AgentRuntime(run_store=run_store)
@@ -1412,7 +1447,12 @@ def _execute_quant_research(args, include_backtest: bool = False) -> QuantResear
         scores.append(score_research(ticker, run.outputs, source_packet=source_packet))
     rank_result = rank_scores(scores)
     backtest_result = backtest_top_ranked(rank_result, top_n=args.top_n) if include_backtest else None
-    return QuantResearchResult(rank_result=rank_result, backtest_result=backtest_result)
+    signal_results = [generate_signal(row) for row in rank_result.rows] if include_signals else []
+    return QuantResearchResult(
+        rank_result=rank_result,
+        backtest_result=backtest_result,
+        signal_results=signal_results,
+    )
 
 
 def _render_rank_result(result: RankResult) -> None:
@@ -1445,6 +1485,29 @@ def _render_backtest_result(result: BacktestResult) -> None:
     print(f"Sharpe: {result.sharpe:.3f}")
     print(f"Max drawdown: {result.max_drawdown:.2%}")
     print(f"Hit rate: {result.hit_rate:.1%}")
+
+
+def _render_signal_results(results: list[SignalResult]) -> None:
+    print("Research-backed signals")
+    for result in results:
+        print()
+        print(f"{result.ticker}: {result.signal}")
+        print(f"Setup score: {result.setup_score:.1f}")
+        print(f"Research stance: {result.research_decision} ({result.confidence})")
+        print(f"Sizing: {result.sizing}")
+        print(f"Suggested action: {result.suggested_action}")
+        print("Diagnostics:")
+        print(f"- trailing 3m: {float(result.diagnostics['trailing_3m_return']):.2%}")
+        print(f"- trailing 6m: {float(result.diagnostics['trailing_6m_return']):.2%}")
+        print(f"- volatility: {float(result.diagnostics['volatility']):.2%}")
+        print(f"- max drawdown: {float(result.diagnostics['max_drawdown']):.2%}")
+        print(f"- hit rate: {float(result.diagnostics['hit_rate']):.1%}")
+        print("Reasons:")
+        for reason in result.reasons:
+            print(f"- {reason}")
+        print("Invalidation triggers:")
+        for trigger in result.invalidation_triggers:
+            print(f"- {trigger}")
 
 
 def _handle_shell(args) -> int:

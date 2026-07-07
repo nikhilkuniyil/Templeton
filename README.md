@@ -52,6 +52,7 @@ templeton investigate ASML --demo
 templeton investigate NVDA --demo --json
 templeton chat ASML "Why was this rated watch?" --demo --refresh
 templeton rank ASML NVDA --demo
+templeton signal ASML NVDA --demo
 templeton backtest ASML NVDA --demo --top-n 2
 templeton benchmark
 templeton shell --demo
@@ -121,6 +122,22 @@ Example:
 ```bash
 templeton rank ASML NVDA --demo
 ```
+
+`signal` turns the same research and factor outputs into a conservative entry label:
+
+```bash
+templeton signal ASML NVDA --demo
+```
+
+Signal labels:
+
+- `BUY_ZONE`: quality, valuation, momentum, risk, and freshness are aligned enough for staged-entry research.
+- `WATCH_FOR_PULLBACK`: quality/setup is interesting, but valuation or entry quality argues for patience.
+- `AVOID_CHASING`: momentum may be strong, but the setup is extended or valuation is too demanding.
+- `RISK_OFF`: risk or return regime is unfavorable.
+- `INSUFFICIENT_DATA`: source freshness or price history is not adequate.
+
+Each signal includes setup score, research stance, sizing band, return diagnostics, reasons, and invalidation triggers. The intent is to make the tradeability discussion explicit without turning the tool into an automated trading system.
 
 `backtest` uses the same ranking and replays the top names as an equal-weight basket over `monthly_returns` from market-data metadata. Demo data ships with a small synthetic series; live SEC/Yahoo and Financial Datasets runs derive approximate monthly returns from daily closes.
 
